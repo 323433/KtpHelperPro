@@ -36,7 +36,7 @@ class ScanActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
-    private var camera: Camera? = null
+    private var camera: androidx.camera.core.Camera? = null
     private var isProcessing = false
     private val cameraExecutor = Executors.newSingleThreadExecutor()
 

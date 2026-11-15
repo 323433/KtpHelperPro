@@ -180,11 +180,11 @@ class MainActivity : AppCompatActivity() {
                 intArrayOf(0xCC0A84FF.toInt(), 0x990055D4.toInt())
             ).apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = 24.dpF
+                cornerRadius = 24f.dpF
             }
             val rim = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = 24.dpF
+                cornerRadius = 24f.dpF
                 setColor(Color.TRANSPARENT)
                 setStroke(1.dp, 0x66FFFFFF)
             }
