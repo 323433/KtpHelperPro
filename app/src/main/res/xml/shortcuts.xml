@@ -4,7 +4,7 @@
         android:enabled="true"
         android:icon="@android:drawable/ic_menu_camera"
         android:shortcutId="quick_scan"
-        android:shortcutShortLabel="极速扫码代签">
+        android:shortcutShortLabel="@string/quick_scan_label">
         <intent
             android:action="android.intent.action.VIEW"
             android:targetClass="com.ktp.helper.ScanActivity"

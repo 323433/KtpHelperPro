@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">课堂派极速助手</string>
+    <string name="quick_scan_label">极速扫码代签</string>
+</resources>
