@@ -68,7 +68,7 @@ class WebLoginActivity : AppCompatActivity() {
 
         val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
-            progressDrawable = LayerDrawable(arrayOf(
+            progressDrawable = LayerDrawable(arrayOf<Drawable>(
                 ColorDrawable(0xFF1E293B.toInt()),
                 ClipDrawable(ColorDrawable(0xFF0A84FF.toInt()), Gravity.START, ClipDrawable.HORIZONTAL)
             ))

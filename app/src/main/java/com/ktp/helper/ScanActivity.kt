@@ -66,7 +66,7 @@ class ScanActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             val fill = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x660F172A) }
             val rim = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x55FFFFFF) }
-            background = LayerDrawable(arrayOf(fill, rim))
+            background = LayerDrawable(arrayOf<Drawable>(fill, rim))
             setOnClickListener { finish() }
         }
 
@@ -87,7 +87,7 @@ class ScanActivity : AppCompatActivity() {
                 setColor(Color.TRANSPARENT)
                 setStroke(1.dp, 0x55FFFFFF)
             }
-            background = LayerDrawable(arrayOf(fill, rim))
+            background = LayerDrawable(arrayOf<Drawable>(fill, rim))
             setPadding(22.dp, 12.dp, 22.dp, 12.dp)
             gravity = Gravity.CENTER
         }

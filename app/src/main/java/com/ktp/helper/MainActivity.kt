@@ -65,7 +65,7 @@ class MainActivity : AppCompatActivity() {
             setColor(Color.TRANSPARENT)
             setStroke(1.dp, (borderAlpha shl 24) or 0x00FFFFFF)
         }
-        return LayerDrawable(arrayOf(fill, stroke))
+        return LayerDrawable(arrayOf<Drawable>(fill, stroke))
     }
 
     private fun attachSpringTouch(view: View, onClick: () -> Unit) {
@@ -188,7 +188,7 @@ class MainActivity : AppCompatActivity() {
                 setColor(Color.TRANSPARENT)
                 setStroke(1.dp, 0x66FFFFFF)
             }
-            background = LayerDrawable(arrayOf(blueGlass, rim))
+            background = LayerDrawable(arrayOf<Drawable>(blueGlass, rim))
             setPadding(18.dp, 20.dp, 18.dp, 20.dp)
             attachSpringTouch(this) {
                 startActivity(Intent(this@MainActivity, ScanActivity::class.java))
