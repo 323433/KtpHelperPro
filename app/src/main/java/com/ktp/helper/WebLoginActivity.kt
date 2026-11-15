@@ -1,18 +1,22 @@
 package com.ktp.helper
 
 import android.annotation.SuppressLint
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ClipDrawable
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
@@ -22,30 +26,78 @@ class WebLoginActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var captured = false
 
+    private val Int.dp: Int
+        get() = (this * resources.displayMetrics.density).toInt()
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = 0xFF0B1120.toInt()
 
         CookieManager.getInstance().removeAllCookies(null)
         WebStorage.getInstance().deleteAllData()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF070B14.toInt())
         }
+
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xFF0B1120.toInt())
+            setPadding(12.dp, 12.dp, 16.dp, 12.dp)
+        }
+        val backBtn = TextView(this).apply {
+            text = "‹ 返回"
+            textSize = 16f
+            setTextColor(0xFF0A84FF.toInt())
+            setPadding(8.dp, 6.dp, 12.dp, 6.dp)
+            setOnClickListener { finish() }
+        }
+        val barTitle = TextView(this).apply {
+            text = "录入同学凭证"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+        topBar.addView(backBtn)
+        topBar.addView(barTitle, LinearLayout.LayoutParams(0, -2, 1f))
+        topBar.addView(View(this), LinearLayout.LayoutParams(54.dp, 1))
+
+        val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressDrawable = LayerDrawable(arrayOf(
+                ColorDrawable(0xFF1E293B.toInt()),
+                ClipDrawable(ColorDrawable(0xFF0A84FF.toInt()), Gravity.START, ClipDrawable.HORIZONTAL)
+            ))
+        }
+
         val tipBar = TextView(this).apply {
-            text = "请直接登录课堂派，登录成功后将自动提取凭证"
-            setPadding(32, 24, 32, 24)
-            setBackgroundColor(0xFF1E1E1E.toInt())
-            setTextColor(0xFF4CAF50.toInt())
+            text = "已开启独立隔离环境 · 登录课堂派后自动保存 Token"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(16.dp, 9.dp, 16.dp, 9.dp)
+            setBackgroundColor(0xFF11192E.toInt())
+            setTextColor(0xFF30D158.toInt())
         }
+
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    progressBar.progress = newProgress
+                    progressBar.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
+                }
+            }
             webViewClient = WebViewClient()
             loadUrl("https://w.ketangpai.com")
         }
 
+        root.addView(topBar)
+        root.addView(progressBar, LinearLayout.LayoutParams(-1, 2.dp))
         root.addView(tipBar)
         root.addView(webView, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
@@ -73,11 +125,14 @@ class WebLoginActivity : AppCompatActivity() {
     }
 
     private fun promptStudentName(token: String) {
-        val input = EditText(this).apply { hint = "输入该同学姓名/备注（如：张三）" }
+        val box = FrameLayout(this).apply { setPadding(24.dp, 12.dp, 24.dp, 4.dp) }
+        val input = EditText(this).apply { hint = "输入该同学姓名（如：张三）" }
+        box.addView(input)
+
         AlertDialog.Builder(this)
             .setTitle("提取凭证成功")
             .setMessage("已自动捕获 Token，请输入备注姓名保存：")
-            .setView(input)
+            .setView(box)
             .setCancelable(false)
             .setPositiveButton("保存") { _, _ ->
                 val name = input.text.toString().trim().ifEmpty { "同学_${System.currentTimeMillis() % 1000}" }
