@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.net.Uri
@@ -44,7 +45,6 @@ class MainActivity : AppCompatActivity() {
         return if (resId > 0) resources.getDimensionPixelSize(resId) else 28.dp
     }
 
-    // 苹果毛玻璃多层材质：半透明白光渐变 + 1dp 镜面高光描边
     private fun makeGlassSurface(
         radiusDp: Float,
         topAlpha: Int = 0x26,
@@ -68,7 +68,6 @@ class MainActivity : AppCompatActivity() {
         return LayerDrawable(arrayOf(fill, stroke))
     }
 
-    // iOS 弹性按压缩放反馈
     private fun attachSpringTouch(view: View, onClick: () -> Unit) {
         view.setOnTouchListener { v, event ->
             when (event.action) {
@@ -109,8 +108,8 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(0xFF070B14.toInt())
         }
 
-        // 底层弥散光斑背景（Android 12+ 启用原生 RenderEffect 高斯模糊）
-        val backdrop = GlassBackdropView(this).apply {
+        val backdrop = View(this).apply {
+            background = makeBackdropDrawable()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 setRenderEffect(RenderEffect.createBlurEffect(85f, 85f, Shader.TileMode.CLAMP))
             }
@@ -127,7 +126,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(20.dp, getStatusBarHeight() + 16.dp, 20.dp, 36.dp)
         }
 
-        // 顶部 iOS 大标题栏 + 毛玻璃状态胶囊
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -174,7 +172,6 @@ class MainActivity : AppCompatActivity() {
         headerRow.addView(statusPill)
         content.addView(headerRow)
 
-        // 核心主卡片：Apple Blue 透光毛玻璃扫码横幅
         val heroCard = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -205,7 +202,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         heroIconCircle.addView(
-            SfIconView(this, SfIconType.SCAN, Color.WHITE),
+            View(this).apply { background = makeSfIconDrawable(SfIconType.SCAN, Color.WHITE) },
             FrameLayout.LayoutParams(24.dp, 24.dp, Gravity.CENTER)
         )
 
@@ -243,7 +240,6 @@ class MainActivity : AppCompatActivity() {
         heroCard.addView(chevronPill, LinearLayout.LayoutParams(32.dp, 32.dp))
         content.addView(heroCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 20.dp })
 
-        // iOS 控制中心风格 2x2 磨砂玻璃磁贴
         fun buildGlassTile(
             iconType: SfIconType,
             badgeColor: Int,
@@ -264,7 +260,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 badge.addView(
-                    SfIconView(this@MainActivity, iconType, Color.WHITE),
+                    View(this@MainActivity).apply { background = makeSfIconDrawable(iconType, Color.WHITE) },
                     FrameLayout.LayoutParams(18.dp, 18.dp, Gravity.CENTER)
                 )
                 addView(badge, LinearLayout.LayoutParams(36.dp, 36.dp))
@@ -314,7 +310,6 @@ class MainActivity : AppCompatActivity() {
         )
         content.addView(gridRow2, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12.dp })
 
-        // iOS 分组列表标题
         val sectionHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -340,7 +335,6 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = 12.dp
         })
 
-        // iOS Inset Grouped 统一毛玻璃列表卡片
         listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = makeGlassSurface(22f, 0x20, 0x0E, 0x3D)
@@ -489,7 +483,6 @@ class MainActivity : AppCompatActivity() {
 
             listContainer.addView(row)
 
-            // iOS 发丝级分割线
             if (index < accounts.size - 1) {
                 val divider = View(this).apply {
                     setBackgroundColor(0x22FFFFFF)
@@ -569,47 +562,122 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, CheckInForegroundService::class.java)
         ContextCompat.startForegroundService(this, intent)
     }
-}
 
-// 弥散光斑背景视图
-class GlassBackdropView(context: Context) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private fun makeBackdropDrawable(): Drawable = object : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
 
-    override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-        if (w <= 0f || h <= 0f) return
+            paint.shader = RadialGradient(
+                w * 0.85f, h * 0.14f, w * 0.72f,
+                intArrayOf(0x660A84FF, 0x1A0A84FF, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(w * 0.85f, h * 0.14f, w * 0.72f, paint)
 
-        // 右上角 Apple Blue 弥散光源
-        paint.shader = RadialGradient(
-            w * 0.85f, h * 0.14f, w * 0.72f,
-            intArrayOf(0x660A84FF, 0x1A0A84FF, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.55f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(w * 0.85f, h * 0.14f, w * 0.72f, paint)
+            paint.shader = RadialGradient(
+                w * 0.12f, h * 0.38f, w * 0.65f,
+                intArrayOf(0x555E5CE6, 0x155E5CE6, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(w * 0.12f, h * 0.38f, w * 0.65f, paint)
 
-        // 左侧 Indigo 弥散光源
-        paint.shader = RadialGradient(
-            w * 0.12f, h * 0.38f, w * 0.65f,
-            intArrayOf(0x555E5CE6, 0x155E5CE6, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.55f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(w * 0.12f, h * 0.38f, w * 0.65f, paint)
+            paint.shader = RadialGradient(
+                w * 0.78f, h * 0.76f, w * 0.68f,
+                intArrayOf(0x4000C7BE, 0x1000C7BE, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(w * 0.78f, h * 0.76f, w * 0.68f, paint)
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
 
-        // 底部 Cyan 弥散光源
-        paint.shader = RadialGradient(
-            w * 0.78f, h * 0.76f, w * 0.68f,
-            intArrayOf(0x4000C7BE, 0x1000C7BE, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.55f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(w * 0.78f, h * 0.76f, w * 0.68f, paint)
+    private fun makeSfIconDrawable(type: SfIconType, strokeColor: Int): Drawable = object : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = strokeColor
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            paint.strokeWidth = w * 0.105f
+            val p = w * 0.16f
+            val c = w * 0.24f
+
+            when (type) {
+                SfIconType.SCAN -> {
+                    val path = Path().apply {
+                        moveTo(p, p + c); lineTo(p, p); lineTo(p + c, p)
+                        moveTo(w - p - c, p); lineTo(w - p, p); lineTo(w - p, p + c)
+                        moveTo(p, h - p - c); lineTo(p, h - p); lineTo(p + c, h - p)
+                        moveTo(w - p - c, h - p); lineTo(w - p, h - p); lineTo(w - p, h - p - c)
+                        moveTo(p + w * 0.08f, h * 0.5f); lineTo(w - p - w * 0.08f, h * 0.5f)
+                    }
+                    canvas.drawPath(path, paint)
+                }
+                SfIconType.PLUS -> {
+                    canvas.drawLine(w * 0.5f, p, w * 0.5f, h - p, paint)
+                    canvas.drawLine(p, h * 0.5f, w - p, h * 0.5f, paint)
+                }
+                SfIconType.PULSE -> {
+                    val path = Path().apply {
+                        moveTo(p * 0.8f, h * 0.52f)
+                        lineTo(w * 0.34f, h * 0.52f)
+                        lineTo(w * 0.44f, h * 0.24f)
+                        lineTo(w * 0.56f, h * 0.78f)
+                        lineTo(w * 0.66f, h * 0.52f)
+                        lineTo(w - p * 0.8f, h * 0.52f)
+                    }
+                    canvas.drawPath(path, paint)
+                }
+                SfIconType.SHARE -> {
+                    val path = Path().apply {
+                        moveTo(w * 0.5f, p)
+                        lineTo(w * 0.5f, h * 0.62f)
+                        moveTo(w * 0.33f, p + w * 0.17f)
+                        lineTo(w * 0.5f, p)
+                        lineTo(w * 0.67f, p + w * 0.17f)
+                        moveTo(w * 0.32f, h * 0.42f)
+                        lineTo(p + w * 0.04f, h * 0.42f)
+                        lineTo(p + w * 0.04f, h - p)
+                        lineTo(w - p - w * 0.04f, h - p)
+                        lineTo(w - p - w * 0.04f, h * 0.42f)
+                        lineTo(w * 0.68f, h * 0.42f)
+                    }
+                    canvas.drawPath(path, paint)
+                }
+                SfIconType.BOLT -> {
+                    val path = Path().apply {
+                        moveTo(w * 0.56f, p)
+                        lineTo(w * 0.28f, h * 0.54f)
+                        lineTo(w * 0.50f, h * 0.54f)
+                        lineTo(w * 0.44f, h - p)
+                        lineTo(w * 0.72f, h * 0.46f)
+                        lineTo(w * 0.50f, h * 0.46f)
+                        close()
+                    }
+                    canvas.drawPath(path, paint)
+                }
+            }
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 }
 
-// iOS 风格平滑动画胶囊开关
 class IosToggleSwitch(
     context: Context,
     initialChecked: Boolean,
@@ -621,6 +689,31 @@ class IosToggleSwitch(
     private val knobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
 
     init {
+        background = object : Drawable() {
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                if (w <= 0f || h <= 0f) return
+                val r = h / 2f
+
+                val offColor = 0x33FFFFFF
+                val onColor = 0xFF30D158.toInt()
+                trackPaint.color = blendColor(offColor, onColor, progress)
+                canvas.drawRoundRect(0f, 0f, w, h, r, r, trackPaint)
+
+                val pad = h * 0.09f
+                val knobR = r - pad
+                val minX = r
+                val maxX = w - r
+                val cx = minX + (maxX - minX) * progress
+                canvas.drawCircle(cx, r, knobR, knobPaint)
+            }
+            override fun setAlpha(alpha: Int) {}
+            override fun setColorFilter(colorFilter: ColorFilter?) {}
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+
         setOnClickListener {
             checked = !checked
             ValueAnimator.ofFloat(progress, if (checked) 1f else 0f).apply {
@@ -628,30 +721,13 @@ class IosToggleSwitch(
                 interpolator = DecelerateInterpolator()
                 addUpdateListener {
                     progress = it.animatedValue as Float
+                    background?.invalidateSelf()
                     invalidate()
                 }
                 start()
             }
             onChanged(checked)
         }
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val r = h / 2f
-
-        val offColor = 0x33FFFFFF
-        val onColor = 0xFF30D158.toInt()
-        trackPaint.color = blendColor(offColor, onColor, progress)
-        canvas.drawRoundRect(0f, 0f, w, h, r, r, trackPaint)
-
-        val pad = h * 0.09f
-        val knobR = r - pad
-        val minX = r
-        val maxX = w - r
-        val cx = minX + (maxX - minX) * progress
-        canvas.drawCircle(cx, r, knobR, knobPaint)
     }
 
     private fun blendColor(c1: Int, c2: Int, ratio: Float): Int {
@@ -665,79 +741,3 @@ class IosToggleSwitch(
 }
 
 enum class SfIconType { SCAN, PLUS, PULSE, SHARE, BOLT }
-
-// 自绘 iOS 极简矢量线性图标
-class SfIconView(context: Context, private val type: SfIconType, strokeColor: Int) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = strokeColor
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-        paint.strokeWidth = w * 0.105f
-        val p = w * 0.16f
-        val c = w * 0.24f
-
-        when (type) {
-            SfIconType.SCAN -> {
-                // 四角扫码框 + 中央扫描线
-                val path = Path().apply {
-                    moveTo(p, p + c); lineTo(p, p); lineTo(p + c, p)
-                    moveTo(w - p - c, p); lineTo(w - p, p); lineTo(w - p, p + c)
-                    moveTo(p, h - p - c); lineTo(p, h - p); lineTo(p + c, h - p)
-                    moveTo(w - p - c, h - p); lineTo(w - p, h - p); lineTo(w - p, h - p - c)
-                    moveTo(p + w * 0.08f, h * 0.5f); lineTo(w - p - w * 0.08f, h * 0.5f)
-                }
-                canvas.drawPath(path, paint)
-            }
-            SfIconType.PLUS -> {
-                canvas.drawLine(w * 0.5f, p, w * 0.5f, h - p, paint)
-                canvas.drawLine(p, h * 0.5f, w - p, h * 0.5f, paint)
-            }
-            SfIconType.PULSE -> {
-                val path = Path().apply {
-                    moveTo(p * 0.8f, h * 0.52f)
-                    lineTo(w * 0.34f, h * 0.52f)
-                    lineTo(w * 0.44f, h * 0.24f)
-                    lineTo(w * 0.56f, h * 0.78f)
-                    lineTo(w * 0.66f, h * 0.52f)
-                    lineTo(w - p * 0.8f, h * 0.52f)
-                }
-                canvas.drawPath(path, paint)
-            }
-            SfIconType.SHARE -> {
-                // 经典 Apple 向上分享箭头图标
-                val path = Path().apply {
-                    moveTo(w * 0.5f, p)
-                    lineTo(w * 0.5f, h * 0.62f)
-                    moveTo(w * 0.33f, p + w * 0.17f)
-                    lineTo(w * 0.5f, p)
-                    lineTo(w * 0.67f, p + w * 0.17f)
-                    moveTo(w * 0.32f, h * 0.42f)
-                    lineTo(p + w * 0.04f, h * 0.42f)
-                    lineTo(p + w * 0.04f, h - p)
-                    lineTo(w - p - w * 0.04f, h - p)
-                    lineTo(w - p - w * 0.04f, h * 0.42f)
-                    lineTo(w * 0.68f, h * 0.42f)
-                }
-                canvas.drawPath(path, paint)
-            }
-            SfIconType.BOLT -> {
-                val path = Path().apply {
-                    moveTo(w * 0.56f, p)
-                    lineTo(w * 0.28f, h * 0.54f)
-                    lineTo(w * 0.50f, h * 0.54f)
-                    lineTo(w * 0.44f, h - p)
-                    lineTo(w * 0.72f, h * 0.46f)
-                    lineTo(w * 0.50f, h * 0.46f)
-                    close()
-                }
-                canvas.drawPath(path, paint)
-            }
-        }
-    }
-}

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.net.Uri
@@ -53,7 +54,9 @@ class ScanActivity : AppCompatActivity() {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         previewView = PreviewView(this)
 
-        val reticleOverlay = ScanReticleOverlay(this)
+        val reticleOverlay = View(this).apply {
+            background = makeReticleDrawable()
+        }
 
         val closeBtn = TextView(this).apply {
             text = "✕"
@@ -114,6 +117,38 @@ class ScanActivity : AppCompatActivity() {
         } else {
             requestPermission.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    private fun makeReticleDrawable(): Drawable = object : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xCCFFFFFF.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 3.5f * resources.displayMetrics.density
+            strokeCap = Paint.Cap.ROUND
+        }
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            val size = w * 0.62f
+            val left = (w - size) / 2f
+            val top = (h - size) / 2f - h * 0.04f
+            val right = left + size
+            val bottom = top + size
+            val arm = size * 0.14f
+
+            val path = Path().apply {
+                moveTo(left, top + arm); lineTo(left, top); lineTo(left + arm, top)
+                moveTo(right - arm, top); lineTo(right, top); lineTo(right, top + arm)
+                moveTo(left, bottom - arm); lineTo(left, bottom); lineTo(left + arm, bottom)
+                moveTo(right - arm, bottom); lineTo(right, bottom); lineTo(right, bottom - arm)
+            }
+            canvas.drawPath(path, paint)
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private fun buildScanner() = BarcodeScanning.getClient(
@@ -225,31 +260,5 @@ class ScanActivity : AppCompatActivity() {
     override fun onDestroy() {
         cameraExecutor.shutdown()
         super.onDestroy()
-    }
-}
-
-class ScanReticleOverlay(context: Context) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xCCFFFFFF.toInt()
-        style = Paint.Style.STROKE
-        strokeWidth = 3.5f * resources.displayMetrics.density
-        strokeCap = Paint.Cap.ROUND
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        val size = width * 0.62f
-        val left = (width - size) / 2f
-        val top = (height - size) / 2f - height * 0.04f
-        val right = left + size
-        val bottom = top + size
-        val arm = size * 0.14f
-
-        val path = Path().apply {
-            moveTo(left, top + arm); lineTo(left, top); lineTo(left + arm, top)
-            moveTo(right - arm, top); lineTo(right, top); lineTo(right, top + arm)
-            moveTo(left, bottom - arm); lineTo(left, bottom); lineTo(left + arm, bottom)
-            moveTo(right - arm, bottom); lineTo(right, bottom); lineTo(right, bottom - arm)
-        }
-        canvas.drawPath(path, paint)
     }
 }
