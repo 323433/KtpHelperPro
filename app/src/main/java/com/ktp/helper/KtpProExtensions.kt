@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
-import android.net.Uri
 import android.os.Build
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
@@ -24,11 +23,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 
 typealias Account = StudentAccount
@@ -62,6 +63,14 @@ data class NumericBatchResult(
     val okCount: Int,
     val skipped: List<String>,
     val failed: List<String>
+)
+
+data class PendingScanReport(
+    val title: String,
+    val summary: String,
+    val detail: String,
+    val qrRawUrl: String,
+    val failedNames: List<String>
 )
 
 object KtpHttpClient {
@@ -106,6 +115,82 @@ object CheckInCooldownGuard {
         }
         recentKeys[key] = now
         return true
+    }
+}
+
+object KtpQrUrlParser {
+    fun parseParams(rawInput: String): Map<String, String> {
+        val map = linkedMapOf<String, String>()
+        val trimmed = rawInput.trim()
+
+        val parts = trimmed.split("#")
+        for (part in parts) {
+            val qIdx = part.indexOf('?')
+            if (qIdx >= 0 && qIdx + 1 < part.length) {
+                val queryStr = part.substring(qIdx + 1)
+                for (pair in queryStr.split("&")) {
+                    val eqIdx = pair.indexOf('=')
+                    if (eqIdx > 0) {
+                        val rawKey = pair.substring(0, eqIdx).trim()
+                        val rawVal = pair.substring(eqIdx + 1).trim()
+                        val decodedVal = try {
+                            URLDecoder.decode(rawVal, "UTF-8")
+                        } catch (_: Exception) {
+                            rawVal
+                        }
+                        if (decodedVal.isNotEmpty()) {
+                            map[rawKey] = decodedVal
+                            map[rawKey.lowercase(Locale.US)] = decodedVal
+                        }
+                    }
+                }
+            }
+        }
+
+        val pathRegex = Regex("""/(?:attence|checkin|sign|q)/([A-Za-z0-9_-]{4,})""", RegexOption.IGNORE_CASE)
+        pathRegex.find(trimmed)?.groupValues?.getOrNull(1)?.let { seg ->
+            if (!map.containsKey("path_id")) {
+                map["path_id"] = seg
+            }
+        }
+        return map
+    }
+
+    fun extractAttenceId(params: Map<String, String>): String {
+        val keys = listOf("id", "attenceid", "signid", "checkinid", "checkin_id", "aid", "path_id")
+        for (k in keys) {
+            val v = params[k]
+            if (!v.isNullOrEmpty() && v.all { ch -> ch.isDigit() }) {
+                return v
+            }
+        }
+        for (k in keys) {
+            val v = params[k]
+            if (!v.isNullOrEmpty()) return v
+        }
+        return ""
+    }
+
+    fun extractCourseId(params: Map<String, String>): String {
+        val keys = listOf("courseid", "cid", "course_id")
+        for (k in keys) {
+            val v = params[k]
+            if (!v.isNullOrEmpty()) return v
+        }
+        return ""
+    }
+
+    fun extractDynamicCode(rawInput: String, params: Map<String, String>): String {
+        val keys = listOf("code", "sign", "signcode", "verify_code", "qrcode", "token", "key", "t")
+        for (k in keys) {
+            val v = params[k]
+            if (!v.isNullOrEmpty()) return v
+        }
+        val trimmed = rawInput.trim()
+        if (!trimmed.startsWith("http", ignoreCase = true) && trimmed.length in 4..64) {
+            return trimmed
+        }
+        return params["path_id"] ?: ""
     }
 }
 
@@ -231,6 +316,59 @@ class ProMetaStore(context: Context) {
         prefs.edit().putString("checkin_records", arr.toString()).apply()
     }
 
+    fun saveLastTask(type: String, value: String) {
+        prefs.edit()
+            .putString("last_task_type", type)
+            .putString("last_task_val", value)
+            .putLong("last_task_ts", System.currentTimeMillis())
+            .apply()
+    }
+
+    fun getLastTask(): Pair<String, String>? {
+        val ts = prefs.getLong("last_task_ts", 0L)
+        if (System.currentTimeMillis() - ts > 20 * 60 * 1000L) return null
+        val t = prefs.getString("last_task_type", null) ?: return null
+        val v = prefs.getString("last_task_val", null) ?: return null
+        return Pair(t, v)
+    }
+
+    fun savePendingScanReport(title: String, summary: String, detail: String, qrRawUrl: String, failedNames: List<String>) {
+        val arr = JSONArray()
+        failedNames.forEach { n -> arr.put(n) }
+        val obj = JSONObject().apply {
+            put("title", title)
+            put("summary", summary)
+            put("detail", detail)
+            put("qrRawUrl", qrRawUrl)
+            put("failedNames", arr)
+            put("ts", System.currentTimeMillis())
+        }
+        prefs.edit().putString("pending_scan_report", obj.toString()).apply()
+    }
+
+    fun consumePendingScanReport(): PendingScanReport? {
+        val raw = prefs.getString("pending_scan_report", null) ?: return null
+        prefs.edit().remove("pending_scan_report").apply()
+        return try {
+            val obj = JSONObject(raw)
+            if (System.currentTimeMillis() - obj.optLong("ts", 0L) > 30_000L) return null
+            val arr = obj.optJSONArray("failedNames") ?: JSONArray()
+            val names = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                names.add(arr.optString(i))
+            }
+            PendingScanReport(
+                title = obj.optString("title"),
+                summary = obj.optString("summary"),
+                detail = obj.optString("detail"),
+                qrRawUrl = obj.optString("qrRawUrl"),
+                failedNames = names
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun clearRecords() {
         prefs.edit().remove("checkin_records").apply()
     }
@@ -239,14 +377,8 @@ class ProMetaStore(context: Context) {
 object KtpCourseSyncer {
 
     fun extractCourseIdFromUrl(rawUrl: String): String? {
-        return try {
-            val uri = Uri.parse(rawUrl)
-            uri.getQueryParameter("courseid")
-                ?: uri.getQueryParameter("courseId")
-                ?: uri.getQueryParameter("cid")
-        } catch (_: Exception) {
-            null
-        }
+        val params = KtpQrUrlParser.parseParams(rawUrl)
+        return KtpQrUrlParser.extractCourseId(params).ifEmpty { null }
     }
 
     fun filterAccountsByCourse(
@@ -336,6 +468,12 @@ object KtpCourseSyncer {
 
 object KtpQrBatchEngine {
 
+    private sealed class QrSingleResult {
+        object Success : QrSingleResult()
+        object Skipped : QrSingleResult()
+        data class Failed(val reason: String) : QrSingleResult()
+    }
+
     suspend fun checkTokenValid(token: String): Boolean = withContext(Dispatchers.IO) {
         val resp = KtpHttpClient.postJson(
             "https://openapiv5.ketangpai.com/CourseApi/semesterCourseList",
@@ -356,46 +494,74 @@ object KtpQrBatchEngine {
         qrRawUrl: String,
         onProgress: (done: Int, total: Int) -> Unit
     ): Pair<Int, List<String>> = coroutineScope {
-        val gps = ProMetaStore(context).getGpsPreset()
-        var doneCount = 0
+        val metaStore = ProMetaStore(context)
+        metaStore.saveLastTask("QR", qrRawUrl)
+        val gps = metaStore.getGpsPreset()
+        val doneCounter = AtomicInteger(0)
 
         val tasks = accounts.map { acc ->
             async(Dispatchers.IO) {
-                delay(Random.nextLong(110L, 380L))
-                val err = executeSingleQr(acc, qrRawUrl, gps)
-                synchronized(this@KtpQrBatchEngine) {
-                    doneCount++
-                    onProgress(doneCount, accounts.size)
-                }
-                err
+                delay(Random.nextLong(100L, 350L))
+                val res = executeSingleQr(metaStore, acc, qrRawUrl, gps)
+                onProgress(doneCounter.incrementAndGet(), accounts.size)
+                res
             }
         }
 
         val results = tasks.awaitAll()
         var ok = 0
         val failed = mutableListOf<String>()
-        results.forEach { err ->
-            if (err == null) ok++ else failed.add(err)
+        results.forEach { res ->
+            when (res) {
+                is QrSingleResult.Success -> ok++
+                is QrSingleResult.Skipped -> {}
+                is QrSingleResult.Failed -> failed.add(res.reason)
+            }
         }
         Pair(ok, failed)
     }
 
-    private fun executeSingleQr(acc: Account, qrRawUrl: String, gps: GpsPreset?): String? {
+    private suspend fun executeSingleQr(
+        metaStore: ProMetaStore,
+        acc: Account,
+        qrRawUrl: String,
+        gps: GpsPreset?
+    ): QrSingleResult {
         return try {
-            val uri = Uri.parse(qrRawUrl)
-            val attId = uri.getQueryParameter("id")
-                ?: uri.getQueryParameter("attenceid")
-                ?: uri.getQueryParameter("signid")
-                ?: ""
-            if (attId.isEmpty()) return "${acc.name}(二维码链接缺少考勤ID)"
+            val params = KtpQrUrlParser.parseParams(qrRawUrl)
+            var attId = KtpQrUrlParser.extractAttenceId(params)
+            val dynCode = KtpQrUrlParser.extractDynamicCode(qrRawUrl, params)
+
+            if (attId.isEmpty()) {
+                val active = KtpNumericCheckInEngine.findActiveAttenceForAccount(metaStore, acc)
+                if (active != null) {
+                    if (active.second.isNotEmpty()) {
+                        val matched = metaStore.getStudentMeta(acc.name).courses.firstOrNull { it.courseId == active.second }
+                        if (matched != null && !matched.enabled) {
+                            return QrSingleResult.Skipped
+                        }
+                        metaStore.markCourseActive(acc.name, active.second)
+                    }
+                    attId = active.first
+                }
+            }
+
+            if (attId.isEmpty()) {
+                return QrSingleResult.Failed("${acc.name}(未识别到考勤ID，且当前无进行中签到)")
+            }
 
             val payload = JSONObject().apply {
-                for (key in uri.queryParameterNames) {
-                    val v = uri.getQueryParameter(key)
-                    if (!v.isNullOrEmpty()) put(key, v)
+                for ((k, v) in params) {
+                    if (k != "path_id" && v.isNotEmpty()) {
+                        put(k, v)
+                    }
                 }
                 put("id", attId)
                 put("attenceid", attId)
+                if (dynCode.isNotEmpty()) {
+                    if (!has("code")) put("code", dynCode)
+                    if (!has("sign")) put("sign", dynCode)
+                }
                 if (gps != null) {
                     val latOffset = (Random.nextDouble() - 0.5) * 0.00014
                     val lngOffset = (Random.nextDouble() - 0.5) * 0.00014
@@ -404,24 +570,33 @@ object KtpQrBatchEngine {
                 }
             }
 
-            val resp = KtpHttpClient.postJson(
+            var resp = KtpHttpClient.postJson(
                 "https://openapiv5.ketangpai.com/AttenceApi/checkin",
                 acc.token,
                 payload.toString()
-            ) ?: return "${acc.name}(请求超时)"
+            )
+            if (resp != null && (resp.contains("方式") || resp.contains("二维码"))) {
+                val fallbackResp = KtpHttpClient.postJson(
+                    "https://openapiv5.ketangpai.com/AttenceApi/AttenceQrCode",
+                    acc.token,
+                    payload.toString()
+                )
+                if (!fallbackResp.isNullOrEmpty()) resp = fallbackResp
+            }
+            if (resp == null) return QrSingleResult.Failed("${acc.name}(请求超时)")
 
             val json = JSONObject(resp)
             val code = json.optInt("code", -1)
             val status = json.optInt("status", -1)
             val msg = json.optString("message", json.optString("msg", ""))
 
-            if (code == 10000 || status == 1 || msg.contains("成功") || msg.contains("已签到")) {
-                null
+            if (code == 10000 || status == 1 || msg.contains("成功") || msg.contains("已签到") || msg.contains("重复")) {
+                QrSingleResult.Success
             } else {
-                "${acc.name}(${msg.ifEmpty { "二维码已过期或签到失败" }})"
+                QrSingleResult.Failed("${acc.name}(${msg.ifEmpty { "二维码已过期或签到失败" }})")
             }
         } catch (_: Exception) {
-            "${acc.name}(请求异常)"
+            QrSingleResult.Failed("${acc.name}(请求异常)")
         }
     }
 }
@@ -442,17 +617,15 @@ object KtpNumericCheckInEngine {
     ): NumericBatchResult = coroutineScope {
         val enabledList = accounts.filter { it.enabled }
         val metaStore = ProMetaStore(context)
+        metaStore.saveLastTask("NUM", code)
         val gps = metaStore.getGpsPreset()
-        var doneCount = 0
+        val doneCounter = AtomicInteger(0)
 
         val tasks = enabledList.map { acc ->
             async(Dispatchers.IO) {
-                delay(Random.nextLong(120L, 450L))
+                delay(Random.nextLong(110L, 400L))
                 val outcome = executeForSingleStudent(metaStore, acc, code, gps)
-                synchronized(this@KtpNumericCheckInEngine) {
-                    doneCount++
-                    onProgress(doneCount, enabledList.size)
-                }
+                onProgress(doneCounter.incrementAndGet(), enabledList.size)
                 outcome
             }
         }
@@ -478,7 +651,7 @@ object KtpNumericCheckInEngine {
         code: String,
         gps: GpsPreset?
     ): SingleOutcome {
-        val activeTask = findActiveAttence(metaStore, acc)
+        val activeTask = findActiveAttenceForAccount(metaStore, acc)
             ?: return SingleOutcome.Failed("${acc.name}(未检测到进行中的签到任务)")
 
         val (attenceId, courseId, serverCode) = activeTask
@@ -521,7 +694,7 @@ object KtpNumericCheckInEngine {
             val statusFlag = json.optInt("status", -1)
             val msg = json.optString("message", json.optString("msg", ""))
 
-            if (statusCode == 10000 || statusFlag == 1 || msg.contains("成功") || msg.contains("已签到")) {
+            if (statusCode == 10000 || statusFlag == 1 || msg.contains("成功") || msg.contains("已签到") || msg.contains("重复")) {
                 SingleOutcome.Success
             } else {
                 val reason = msg.ifEmpty { "口令错误或已结束" }
@@ -532,7 +705,7 @@ object KtpNumericCheckInEngine {
         }
     }
 
-    private suspend fun findActiveAttence(
+    suspend fun findActiveAttenceForAccount(
         metaStore: ProMetaStore,
         acc: Account
     ): Triple<String, String, String>? {

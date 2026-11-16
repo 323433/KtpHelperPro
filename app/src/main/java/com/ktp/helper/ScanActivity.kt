@@ -20,10 +20,10 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -61,6 +61,7 @@ class ScanActivity : AppCompatActivity() {
     private var autoRescanCount = 0
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private var laserAnimator: ValueAnimator? = null
+    private var zoomAnimator: ValueAnimator? = null
     private val zoomButtons = mutableListOf<Pair<Float, TextView>>()
 
     private val Int.dp: Int
@@ -130,7 +131,7 @@ class ScanActivity : AppCompatActivity() {
                     currentZoom < 3.5f -> 4.0f
                     else -> 1.0f
                 }
-                applyZoom(nextZoom)
+                applyZoomSmooth(nextZoom)
                 return true
             }
         })
@@ -178,7 +179,6 @@ class ScanActivity : AppCompatActivity() {
             }
         }
 
-        // 底部变焦分段胶囊 (1.0x · 2.5x · 4.0x)
         val zoomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -200,7 +200,7 @@ class ScanActivity : AppCompatActivity() {
                 setPadding(14.dp, 6.dp, 14.dp, 6.dp)
                 setOnClickListener {
                     performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    applyZoom(ratio)
+                    applyZoomSmooth(ratio)
                 }
             }
             zoomButtons.add(ratio to pill)
@@ -281,10 +281,20 @@ class ScanActivity : AppCompatActivity() {
         return LayerDrawable(arrayOf<Drawable>(fill, rim))
     }
 
-    private fun applyZoom(ratio: Float) {
-        currentZoom = ratio
-        camera?.cameraControl?.setZoomRatio(ratio)
-        updateZoomPillsUI(ratio)
+    private fun applyZoomSmooth(targetRatio: Float) {
+        zoomAnimator?.cancel()
+        val startRatio = currentZoom
+        updateZoomPillsUI(targetRatio)
+        zoomAnimator = ValueAnimator.ofFloat(startRatio, targetRatio).apply {
+            duration = 220L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { anim ->
+                val v = anim.animatedValue as Float
+                currentZoom = v
+                camera?.cameraControl?.setZoomRatio(v)
+            }
+            start()
+        }
     }
 
     private fun updateZoomPillsUI(activeRatio: Float) {
@@ -332,11 +342,16 @@ class ScanActivity : AppCompatActivity() {
     }
 
     private fun isKetangpaiQr(raw: String): Boolean {
-        val lower = raw.lowercase(Locale.US)
-        return lower.contains("ketangpai.com") ||
-            lower.contains("attence") ||
-            lower.contains("signid") ||
-            lower.contains("courseid")
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        val lower = trimmed.lowercase(Locale.US)
+        if (lower.contains("ketangpai.com") || lower.contains("attence") || lower.contains("signid") || lower.contains("courseid") || lower.contains("checkin")) {
+            return true
+        }
+        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.contains("://")) {
+            return false
+        }
+        return trimmed.length in 4..256
     }
 
     private fun buildScanner() = BarcodeScanning.getClient(
@@ -344,9 +359,7 @@ class ScanActivity : AppCompatActivity() {
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
             .setZoomSuggestionOptions(
                 ZoomSuggestionOptions.Builder { zoomRatio ->
-                    currentZoom = zoomRatio
-                    camera?.cameraControl?.setZoomRatio(zoomRatio)
-                    runOnUiThread { updateZoomPillsUI(zoomRatio) }
+                    runOnUiThread { applyZoomSmooth(zoomRatio) }
                     true
                 }.setMaxSupportedZoomRatio(5.0f).build()
             )
@@ -429,7 +442,13 @@ class ScanActivity : AppCompatActivity() {
         val (targetAccounts, skippedList) = KtpCourseSyncer.filterAccountsByCourse(this, baseAccounts, qrContent)
 
         if (targetAccounts.isEmpty()) {
-            Toast.makeText(this, "当前没有符合该课程勾选条件的启用账号", Toast.LENGTH_SHORT).show()
+            ProMetaStore(this).savePendingScanReport(
+                title = "扫码提示",
+                summary = "未执行提交",
+                detail = "当前没有符合该课程勾选条件的启用账号。",
+                qrRawUrl = "",
+                failedNames = emptyList()
+            )
             finish()
             return
         }
@@ -464,8 +483,15 @@ class ScanActivity : AppCompatActivity() {
                     if (!isFinishing && !isProcessing) {
                         val summary = "部分成功 $okCount 人 · 续扫超时"
                         val detail = "未补签: ${remainAccounts.joinToString(separator = ", ") { acc -> acc.name }}"
-                        ProMetaStore(this@ScanActivity).addRecord(modeLabel, summary, detail)
-                        Toast.makeText(this@ScanActivity, "$summary ($detail)", Toast.LENGTH_LONG).show()
+                        val store = ProMetaStore(this@ScanActivity)
+                        store.addRecord(modeLabel, summary, detail)
+                        store.savePendingScanReport(
+                            title = "扫码考勤战报（$modeLabel）",
+                            summary = summary,
+                            detail = detail,
+                            qrRawUrl = qrContent,
+                            failedNames = remainAccounts.map { acc -> acc.name }
+                        )
                         finish()
                     }
                     return@launch
@@ -479,11 +505,20 @@ class ScanActivity : AppCompatActivity() {
             if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString(separator = ", ")}")
             if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString(separator = ", ")}")
             val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(separator = " | ")
-            ProMetaStore(this@ScanActivity).addRecord(finalMode, summary, detail)
 
-            val msg = if (failed.isEmpty()) "全员签到成功 ($okCount 人) · 耗时 ${cost}ms"
-            else "成功 $okCount 人，失败: ${failed.joinToString(separator = ", ")}"
-            Toast.makeText(this@ScanActivity, msg, Toast.LENGTH_LONG).show()
+            val failedNames = targetAccounts.filter { acc ->
+                failed.any { msg -> msg.startsWith(acc.name) }
+            }.map { acc -> acc.name }
+
+            val store = ProMetaStore(this@ScanActivity)
+            store.addRecord(finalMode, summary, detail)
+            store.savePendingScanReport(
+                title = "扫码考勤战报（$finalMode）",
+                summary = summary,
+                detail = detail,
+                qrRawUrl = qrContent,
+                failedNames = failedNames
+            )
             finish()
         }
     }
@@ -503,11 +538,12 @@ class ScanActivity : AppCompatActivity() {
     @Suppress("DEPRECATION")
     override fun finish() {
         super.finish()
-        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+        overridePendingTransition(R.anim.page_pop_enter, R.anim.page_pop_exit)
     }
 
     override fun onDestroy() {
         laserAnimator?.cancel()
+        zoomAnimator?.cancel()
         cameraExecutor.shutdown()
         super.onDestroy()
     }
@@ -543,11 +579,9 @@ class ReticleLaserOverlayView(
         val bottom = top + size
         val cutRadius = 22f * resources.displayMetrics.density
 
-        // 外部半透明暗化遮罩 + 中央圆角透明镂空
         canvas.drawRect(0f, 0f, w, h, dimPaint)
         canvas.drawRoundRect(RectF(left, top, right, bottom), cutRadius, cutRadius, clearPaint)
 
-        // 科技青蓝圆角取景框四角
         val arm = size * 0.14f
         val path = Path().apply {
             moveTo(left, top + arm); lineTo(left, top); lineTo(left + arm, top)
@@ -557,7 +591,6 @@ class ReticleLaserOverlayView(
         }
         canvas.drawPath(path, cornerPaint)
 
-        // 上下往复扫动的激光光束
         val pad = 16f * resources.displayMetrics.density
         val y = top + pad + (size - pad * 2f) * progressProvider()
         laserPaint.shader = LinearGradient(

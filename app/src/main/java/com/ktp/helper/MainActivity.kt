@@ -2,7 +2,6 @@ package com.ktp.helper
 
 import android.Manifest
 import android.animation.LayoutTransition
-import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.ClipData
@@ -49,7 +48,10 @@ class MainActivity : AppCompatActivity() {
     private var pendingGpsInputs: Pair<EditText, EditText>? = null
     private var auroraAnimator: ValueAnimator? = null
     private var sheenAnimator: ValueAnimator? = null
+    private var radarAnimator: ValueAnimator? = null
     private var hasAnimatedEntrance = false
+    private var lastRenderedAccountCount = 0
+    private var lastRenderedCourseCount = 0
 
     private val locationPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -74,7 +76,6 @@ class MainActivity : AppCompatActivity() {
         return if (resId > 0) resources.getDimensionPixelSize(resId) else 28.dp
     }
 
-    // 3D 顶光立体玻璃表面（顶部亮白高光，底部渐隐描边）
     private fun makeBevelGlassSurface(
         radiusDp: Float,
         darkTopAlpha: Int = 0x28,
@@ -166,7 +167,7 @@ class MainActivity : AppCompatActivity() {
     @Suppress("DEPRECATION")
     private fun launchSmoothActivity(intent: Intent) {
         startActivity(intent)
-        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+        overridePendingTransition(R.anim.page_enter, R.anim.page_exit)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -197,8 +198,8 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(if (isLight) 0xFFEEF2F9.toInt() else 0xFF070B14.toInt())
         }
 
-        // 动态呼吸极光背景层
         var auroraPhase = 0f
+        var scrollParallaxY = 0f
         val backdrop = View(this).apply {
             background = object : Drawable() {
                 private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -207,19 +208,19 @@ class MainActivity : AppCompatActivity() {
                     val h = bounds.height().toFloat()
                     if (w <= 0f || h <= 0f) return
                     val shiftX = (auroraPhase - 0.5f) * w * 0.14f
-                    val shiftY = (auroraPhase - 0.5f) * h * 0.08f
+                    val shiftY = (auroraPhase - 0.5f) * h * 0.08f - scrollParallaxY
 
                     val c1 = if (isLight) intArrayOf(0x4A38BDF8, 0x1438BDF8, Color.TRANSPARENT) else intArrayOf(0x6E0A84FF, 0x1E0A84FF, Color.TRANSPARENT)
                     paint.shader = RadialGradient(w * 0.85f - shiftX, h * 0.14f + shiftY, w * 0.74f, c1, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
                     canvas.drawCircle(w * 0.85f - shiftX, h * 0.14f + shiftY, w * 0.74f, paint)
 
                     val c2 = if (isLight) intArrayOf(0x3E818CF8, 0x12818CF8, Color.TRANSPARENT) else intArrayOf(0x5C5E5CE6, 0x185E5CE6, Color.TRANSPARENT)
-                    paint.shader = RadialGradient(w * 0.12f + shiftX, h * 0.38f - shiftY, w * 0.66f, c2, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-                    canvas.drawCircle(w * 0.12f + shiftX, h * 0.38f - shiftY, w * 0.66f, paint)
+                    paint.shader = RadialGradient(w * 0.12f + shiftX, h * 0.38f - shiftY * 0.6f, w * 0.66f, c2, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                    canvas.drawCircle(w * 0.12f + shiftX, h * 0.38f - shiftY * 0.6f, w * 0.66f, paint)
 
                     val c3 = if (isLight) intArrayOf(0x3C2DD4BF, 0x102DD4BF, Color.TRANSPARENT) else intArrayOf(0x4800C7BE, 0x1200C7BE, Color.TRANSPARENT)
-                    paint.shader = RadialGradient(w * 0.78f + shiftX * 0.6f, h * 0.76f - shiftY, w * 0.70f, c3, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-                    canvas.drawCircle(w * 0.78f + shiftX * 0.6f, h * 0.76f - shiftY, w * 0.70f, paint)
+                    paint.shader = RadialGradient(w * 0.78f + shiftX * 0.6f, h * 0.76f + shiftY * 0.4f, w * 0.70f, c3, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                    canvas.drawCircle(w * 0.78f + shiftX * 0.6f, h * 0.76f + shiftY * 0.4f, w * 0.70f, paint)
                 }
                 override fun setAlpha(alpha: Int) {}
                 override fun setColorFilter(colorFilter: ColorFilter?) {}
@@ -253,11 +254,20 @@ class MainActivity : AppCompatActivity() {
             setPadding(20.dp, getStatusBarHeight() + 14.dp, 20.dp, 42.dp)
         }
 
-        // 1. 顶部品牌栏
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+
+        scroll.viewTreeObserver.addOnScrollChangedListener {
+            val sy = scroll.scrollY.toFloat()
+            scrollParallaxY = (sy * 0.22f).coerceAtMost(140f.dpF)
+            backdrop.background?.invalidateSelf()
+            val ratio = (sy / 110f.dpF).coerceIn(0f, 1f)
+            headerRow.alpha = 1f - ratio * 0.18f
+            headerRow.translationY = -sy * 0.12f
+        }
+
         val titleCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         titleCol.addView(TextView(this).apply {
             text = "KETANGPAI · GLASS PRO"
@@ -276,8 +286,8 @@ class MainActivity : AppCompatActivity() {
 
         val syncAllBtn = FrameLayout(this).apply {
             background = makeBevelGlassSurface(18f, 0x28, 0x12, 0x52)
-            attachSpringTouch(this, 0.90f) {
-                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            attachSpringTouch(this, 0.90f) { v ->
+                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 syncAllAccountsCourses()
             }
         }
@@ -288,8 +298,8 @@ class MainActivity : AppCompatActivity() {
 
         val themeBtn = FrameLayout(this).apply {
             background = makeBevelGlassSurface(18f, 0x28, 0x12, 0x52)
-            attachSpringTouch(this, 0.90f) {
-                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            attachSpringTouch(this, 0.90f) { v ->
+                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 metaStore.setLightTheme(!isLight)
                 recreate()
                 @Suppress("DEPRECATION")
@@ -327,7 +337,6 @@ class MainActivity : AppCompatActivity() {
         headerRow.addView(statusPill)
         content.addView(headerRow)
 
-        // 2. 剪贴板动态链接嗅探条
         clipboardBanner = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -368,7 +377,6 @@ class MainActivity : AppCompatActivity() {
         clipboardBanner.addView(clipGoBtn)
         content.addView(clipboardBanner, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
-        // 3. 双指标统计毛玻璃看板
         val statsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = makeBevelGlassSurface(22f, 0x26, 0x10, 0x52)
@@ -411,7 +419,7 @@ class MainActivity : AppCompatActivity() {
         statsCard.addView(statsRow)
 
         statsCard.addView(TextView(this).apply {
-            text = "🔒 零后台零耗电 · HTTP/2 并发池 · 相册识码与单课过滤"
+            text = "🔒 零后台零耗电 · HTTP/2 并发池 · 长按课程胶囊可开启单课专注"
             textSize = 11f
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -420,7 +428,6 @@ class MainActivity : AppCompatActivity() {
         })
         content.addView(statsCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
-        // 4. 主视觉「极速扫动态二维码」蓝玻璃卡片（带定时高光扫过动画）
         var sheenProgress = -0.5f
         val heroCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -441,7 +448,7 @@ class MainActivity : AppCompatActivity() {
                     val cx = w * (-0.3f + sheenProgress * 1.6f)
                     p.shader = LinearGradient(
                         cx - w * 0.25f, 0f, cx + w * 0.25f, h,
-                        intArrayOf(Color.TRANSPARENT, 0x26FFFFFF, Color.TRANSPARENT),
+                        intArrayOf(Color.TRANSPARENT, 0x28FFFFFF, Color.TRANSPARENT),
                         floatArrayOf(0f, 0.5f, 1f),
                         Shader.TileMode.CLAMP
                     )
@@ -475,9 +482,19 @@ class MainActivity : AppCompatActivity() {
         val heroTopRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            attachSpringTouch(this) {
-                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            attachSpringTouch(this) { v ->
+                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 launchSmoothActivity(Intent(this@MainActivity, ScanActivity::class.java))
+            }
+        }
+
+        // 带脉冲雷达波纹的扫码图标容器
+        val heroIconContainer = FrameLayout(this)
+        val radarPulseRing = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.TRANSPARENT)
+                setStroke(1.5f.dpF.toInt(), 0x88FFFFFF.toInt())
             }
         }
         val heroIconCircle = FrameLayout(this).apply {
@@ -488,12 +505,28 @@ class MainActivity : AppCompatActivity() {
         }
         heroIconCircle.addView(
             View(this).apply { background = makeSfIconDrawable(SfIconType.SCAN, Color.WHITE) },
-            FrameLayout.LayoutParams(23.dp, 23.dp, Gravity.CENTER)
+            FrameLayout.LayoutParams(22.dp, 22.dp, Gravity.CENTER)
         )
+        heroIconContainer.addView(radarPulseRing, FrameLayout.LayoutParams(46.dp, 46.dp, Gravity.CENTER))
+        heroIconContainer.addView(heroIconCircle, FrameLayout.LayoutParams(44.dp, 44.dp, Gravity.CENTER))
+
+        radarAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 2200L
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { anim ->
+                val f = anim.animatedValue as Float
+                val s = 0.94f + f * 0.24f
+                radarPulseRing.scaleX = s
+                radarPulseRing.scaleY = s
+                radarPulseRing.alpha = (1f - f) * 0.75f
+            }
+            start()
+        }
 
         val heroTextCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(14.dp, 0, 8.dp, 0)
+            setPadding(12.dp, 0, 8.dp, 0)
         }
         heroTextCol.addView(TextView(this).apply {
             text = "极速扫动态二维码"
@@ -521,7 +554,7 @@ class MainActivity : AppCompatActivity() {
                 setColor(0x2EFFFFFF)
             }
         }
-        heroTopRow.addView(heroIconCircle, LinearLayout.LayoutParams(46.dp, 46.dp))
+        heroTopRow.addView(heroIconContainer, LinearLayout.LayoutParams(50.dp, 50.dp))
         heroTopRow.addView(heroTextCol, LinearLayout.LayoutParams(0, -2, 1f))
         heroTopRow.addView(chevronPill, LinearLayout.LayoutParams(30.dp, 30.dp))
         heroCard.addView(heroTopRow)
@@ -538,8 +571,8 @@ class MainActivity : AppCompatActivity() {
                 val stroke = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x38FFFFFF) }
                 background = LayerDrawable(arrayOf<Drawable>(fill, stroke))
                 setPadding(0, 9.dp, 0, 9.dp)
-                attachSpringTouch(this, 0.94f) {
-                    it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                attachSpringTouch(this, 0.94f) { v ->
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     onClick()
                 }
             }
@@ -562,7 +595,6 @@ class MainActivity : AppCompatActivity() {
 
         content.addView(heroCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
-        // 5. 2x2 功能毛玻璃磁贴
         fun buildGlassTile(
             iconType: SfIconType,
             badgeColor: Int,
@@ -574,8 +606,8 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 background = makeBevelGlassSurface(22f, 0x24, 0x0E, 0x4A)
                 setPadding(15.dp, 14.dp, 15.dp, 14.dp)
-                attachSpringTouch(this) {
-                    it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                attachSpringTouch(this) { v ->
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     onClick()
                 }
 
@@ -638,7 +670,6 @@ class MainActivity : AppCompatActivity() {
         )
         content.addView(gridRow2, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12.dp })
 
-        // 6. 账号池标题栏
         val sectionHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -695,15 +726,51 @@ class MainActivity : AppCompatActivity() {
         checkClipboardForKtpUrl()
         renderAccountList(animateEntrance = !hasAnimatedEntrance)
         hasAnimatedEntrance = true
+
+        // 接收 ScanActivity 传递过来的战报，自动弹出毛玻璃战报抽屉
+        val pendingReport = metaStore.consumePendingScanReport()
+        if (pendingReport != null) {
+            val allAccounts = store.getAccounts()
+            val failedAccounts = allAccounts.filter { acc ->
+                pendingReport.failedNames.any { fn -> fn == acc.name }
+            }
+            window.decorView.postDelayed({
+                showResultReportSheet(
+                    title = pendingReport.title,
+                    summary = pendingReport.summary,
+                    detail = pendingReport.detail,
+                    failedAccounts = failedAccounts
+                ) {
+                    if (pendingReport.qrRawUrl.isNotEmpty() && failedAccounts.isNotEmpty()) {
+                        executeUrlCheckIn(pendingReport.qrRawUrl, "扫码·补签", failedAccounts)
+                    }
+                }
+            }, 180L)
+        }
     }
 
     override fun onDestroy() {
         auroraAnimator?.cancel()
         sheenAnimator?.cancel()
+        radarAnimator?.cancel()
         super.onDestroy()
     }
 
-    // ==================== 二级毛玻璃抽屉 1：触感玻璃数字键盘 & 免码抢签 ====================
+    private fun animateStatNumber(view: TextView, fromVal: Int, toVal: Int) {
+        if (fromVal == toVal) {
+            view.text = toVal.toString()
+            return
+        }
+        ValueAnimator.ofInt(fromVal, toVal).apply {
+            duration = 320L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { anim ->
+                view.text = (anim.animatedValue as Int).toString()
+            }
+            start()
+        }
+    }
+
     private fun showNumericKeypadSheet() {
         val sheet = GlassBottomSheet(
             context = this,
@@ -749,6 +816,7 @@ class MainActivity : AppCompatActivity() {
         body.addView(autoHero, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16.dp })
 
         var codeBuffer = ""
+        var isLockedSubmitting = false
         val pinBoxes = Array(4) {
             TextView(this).apply {
                 text = ""
@@ -761,23 +829,34 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        fun refreshPinBoxes() {
+        fun refreshPinBoxes(confirmed: Boolean = false) {
             for (i in 0 until 4) {
                 val ch = codeBuffer.getOrNull(i)?.toString() ?: ""
                 pinBoxes[i].text = ch
-                val isFocused = (i == codeBuffer.length)
+                val isFocused = (!confirmed && i == codeBuffer.length)
                 val fill = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 16f.dpF
-                    setColor(if (isLight) 0xF2FFFFFF.toInt() else 0x24FFFFFF)
+                    setColor(
+                        when {
+                            confirmed -> 0x3330D158
+                            isLight -> 0xF2FFFFFF.toInt()
+                            else -> 0x24FFFFFF
+                        }
+                    )
                 }
                 val stroke = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 16f.dpF
                     setColor(Color.TRANSPARENT)
                     setStroke(
-                        if (isFocused) 2.dp else 1.dp,
-                        if (isFocused) 0xFF0A84FF.toInt() else (if (isLight) 0x220F172A else 0x38FFFFFF)
+                        if (confirmed || isFocused) 2.dp else 1.dp,
+                        when {
+                            confirmed -> 0xFF30D158.toInt()
+                            isFocused -> 0xFF0A84FF.toInt()
+                            isLight -> 0x220F172A
+                            else -> 0x38FFFFFF
+                        }
                     )
                 }
                 pinBoxes[i].background = LayerDrawable(arrayOf<Drawable>(fill, stroke))
@@ -817,8 +896,9 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(if (isActionKey) textSecondary else textPrimary)
                     background = makeBevelGlassSurface(16f, 0x28, 0x12, 0x45)
                 }
-                attachSpringTouch(keyBtn, 0.93f) {
-                    keyBtn.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                attachSpringTouch(keyBtn, 0.93f) { v ->
+                    if (isLockedSubmitting) return@attachSpringTouch
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     when (label) {
                         "清空" -> {
                             codeBuffer = ""
@@ -833,12 +913,15 @@ class MainActivity : AppCompatActivity() {
                         else -> {
                             if (codeBuffer.length < 4) {
                                 codeBuffer += label
-                                refreshPinBoxes()
                                 if (codeBuffer.length == 4) {
+                                    isLockedSubmitting = true
+                                    refreshPinBoxes(confirmed = true)
                                     val finalCode = codeBuffer
-                                    keyBtn.postDelayed({
+                                    v.postDelayed({
                                         sheet.dismiss { executeNumericCheckIn(finalCode) }
-                                    }, 140L)
+                                    }, 220L)
+                                } else {
+                                    refreshPinBoxes()
                                 }
                             }
                         }
@@ -856,7 +939,6 @@ class MainActivity : AppCompatActivity() {
         sheet.show()
     }
 
-    // ==================== 二级毛玻璃抽屉 2：地点预设与配置流转中心 ====================
     private fun showToolsSheet() {
         val currentGps = metaStore.getGpsPreset()
         val gpsSub = if (currentGps != null) {
@@ -942,7 +1024,6 @@ class MainActivity : AppCompatActivity() {
         sheet.show()
     }
 
-    // ==================== 二级毛玻璃抽屉 3：教学楼 GPS 坐标采集器 ====================
     private fun showGpsPresetSheet() {
         val old = metaStore.getGpsPreset()
         val sheet = GlassBottomSheet(
@@ -1064,8 +1145,29 @@ class MainActivity : AppCompatActivity() {
     private fun fillCurrentLocation(latEt: EditText, lngEt: EditText) {
         try {
             val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val provider = if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    LocationManager.NETWORK_PROVIDER
+                } else {
+                    LocationManager.GPS_PROVIDER
+                }
+                GlassIslandBanner.show(this, "正在主动获取室内教室坐标...", GlassIslandBanner.Tone.INFO, isLight, 1500L)
+                lm.getCurrentLocation(provider, null, mainExecutor) { loc ->
+                    val target = loc
+                        ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                        ?: lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                    if (target != null) {
+                        latEt.setText(String.format(Locale.US, "%.6f", target.latitude))
+                        lngEt.setText(String.format(Locale.US, "%.6f", target.longitude))
+                        GlassIslandBanner.show(this, "已捕获当前教室经纬度", GlassIslandBanner.Tone.SUCCESS, isLight)
+                    } else {
+                        GlassIslandBanner.show(this, "暂未获取到定位，请开启系统定位开关", GlassIslandBanner.Tone.WARN, isLight)
+                    }
+                }
+                return
+            }
+            val loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 ?: lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
             if (loc != null) {
                 latEt.setText(String.format(Locale.US, "%.6f", loc.latitude))
@@ -1079,7 +1181,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ==================== 二级毛玻璃抽屉 4：粘贴链接代签 ====================
     private fun showPasteLinkSheet() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clipText = cm.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
@@ -1097,7 +1198,7 @@ class MainActivity : AppCompatActivity() {
         val hintColor = if (isLight) 0xFF94A3B8.toInt() else 0x66FFFFFF
 
         val input = EditText(this).apply {
-            hint = "https://www.ketangpai.com/..."
+            hint = "https://w.ketangpai.com/..."
             setText(if (clipText.contains("http")) clipText else "")
             setTextColor(textPrimary)
             setHintTextColor(hintColor)
@@ -1130,7 +1231,6 @@ class MainActivity : AppCompatActivity() {
         sheet.show()
     }
 
-    // ==================== 二级毛玻璃抽屉 5：战报结果 & 历史时间轴 ====================
     private fun showResultReportSheet(
         title: String,
         summary: String,
@@ -1327,7 +1427,6 @@ class MainActivity : AppCompatActivity() {
         sheet.show()
     }
 
-    // ==================== 核心签到执行与账号池双列课程胶囊渲染 ====================
     private fun executeNumericCheckIn(code: String, overrideAccounts: List<Account>? = null) {
         val targetList = overrideAccounts ?: store.getAccounts()
         if (targetList.none { it.enabled }) {
@@ -1439,14 +1538,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateDashboardStats(accounts: List<Account>) {
         val enabledAccounts = accounts.filter { it.enabled }
-        activeAccountsStat.text = enabledAccounts.size.toString()
+        val newAccCount = enabledAccounts.size
         var totalCourses = 0
         enabledAccounts.forEach { acc ->
             val meta = metaStore.getStudentMeta(acc.name)
             totalCourses += meta.courses.count { it.enabled }
         }
-        activeCoursesStat.text = totalCourses.toString()
-        countBadge.text = "${enabledAccounts.size} / ${accounts.size} 人"
+        animateStatNumber(activeAccountsStat, lastRenderedAccountCount, newAccCount)
+        animateStatNumber(activeCoursesStat, lastRenderedCourseCount, totalCourses)
+        lastRenderedAccountCount = newAccCount
+        lastRenderedCourseCount = totalCourses
+        countBadge.text = "$newAccCount / ${accounts.size} 人"
     }
 
     private fun makeCourseChipBg(enabled: Boolean): LayerDrawable {
@@ -1529,8 +1631,8 @@ class MainActivity : AppCompatActivity() {
             val topRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setOnClickListener {
-                    it.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                setOnClickListener { v ->
+                    v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     expandedStates[acc.name] = !isExpanded
                     renderAccountList(animateEntrance = false)
                 }
@@ -1604,7 +1706,7 @@ class MainActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER_VERTICAL
                 }
                 semHeader.addView(TextView(this).apply {
-                    text = "${meta.semester} · 高频置顶"
+                    text = "${meta.semester} · 长按可单选"
                     textSize = 11.5f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(textSecondary)
@@ -1666,7 +1768,6 @@ class MainActivity : AppCompatActivity() {
                         setPadding(4.dp, 6.dp, 4.dp, 8.dp)
                     })
                 } else {
-                    // 双列毛玻璃课程胶囊网格 (2-Column Glass Chips)
                     var rowPair: LinearLayout? = null
                     meta.courses.forEachIndexed { cIdx, course ->
                         if (cIdx % 2 == 0) {
@@ -1681,12 +1782,30 @@ class MainActivity : AppCompatActivity() {
                             gravity = Gravity.CENTER_VERTICAL
                             background = makeCourseChipBg(course.enabled)
                             setPadding(10.dp, 9.dp, 10.dp, 9.dp)
-                            attachSpringTouch(this, 0.95f) {
-                                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            setOnClickListener { v ->
+                                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                 meta.courses[cIdx].enabled = !course.enabled
                                 meta.courses[cIdx].lastActiveTs = System.currentTimeMillis()
                                 metaStore.saveStudentMeta(acc.name, meta)
                                 renderAccountList(animateEntrance = false)
+                            }
+                            // 长按触发“单课专注模式”（仅保留此课，再次长按恢复全选）
+                            setOnLongClickListener { v ->
+                                v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                val isAlreadySolo = course.enabled && meta.courses.count { it.enabled } == 1
+                                if (isAlreadySolo) {
+                                    meta.courses.forEach { it.enabled = true }
+                                    GlassIslandBanner.show(this@MainActivity, "已恢复 ${acc.name} 的全部课程", GlassIslandBanner.Tone.INFO, isLight)
+                                } else {
+                                    meta.courses.forEachIndexed { idx, item ->
+                                        item.enabled = (idx == cIdx)
+                                    }
+                                    meta.courses[cIdx].lastActiveTs = System.currentTimeMillis()
+                                    GlassIslandBanner.show(this@MainActivity, "单课专注：仅签到《${course.courseName}》", GlassIslandBanner.Tone.SUCCESS, isLight)
+                                }
+                                metaStore.saveStudentMeta(acc.name, meta)
+                                renderAccountList(animateEntrance = false)
+                                true
                             }
                         }
 
@@ -1715,14 +1834,12 @@ class MainActivity : AppCompatActivity() {
                         }
                         rowPair?.addView(chip, chipLp)
 
-                        // 若为奇数末尾项，补充占位保持对齐
                         if (cIdx == meta.courses.lastIndex && cIdx % 2 == 0) {
                             rowPair?.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { leftMargin = 4.dp })
                         }
                     }
                 }
 
-                // 卡片底部精致胶囊操作栏
                 val footerActions = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.END
@@ -1747,7 +1864,12 @@ class MainActivity : AppCompatActivity() {
 
                 val singleRetryBtn = makeActionMiniPill("⚡ 单独补签", 0xFFFF9F0A.toInt()) {
                     val singleCopy = acc.copy(enabled = true)
-                    executeNumericCheckIn("AUTO", listOf(singleCopy))
+                    val lastTask = metaStore.getLastTask()
+                    if (lastTask != null && lastTask.first == "QR") {
+                        executeUrlCheckIn(lastTask.second, "${acc.name}·单独补签", listOf(singleCopy))
+                    } else {
+                        executeNumericCheckIn(lastTask?.second ?: "AUTO", listOf(singleCopy))
+                    }
                 }
                 val refreshCredBtn = makeActionMiniPill("更新凭证", 0xFF0A84FF.toInt()) {
                     launchSmoothActivity(Intent(this@MainActivity, WebLoginActivity::class.java).apply {
