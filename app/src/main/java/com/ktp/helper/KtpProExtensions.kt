@@ -86,12 +86,24 @@ object KtpHttpClient {
     val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
+            .connectionPool(ConnectionPool(12, 5, TimeUnit.MINUTES))
             .connectTimeout(6, TimeUnit.SECONDS)
             .readTimeout(6, TimeUnit.SECONDS)
             .writeTimeout(6, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
+    }
+
+    suspend fun warmup() = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("https://openapiv5.ketangpai.com/")
+                .head()
+                .header("User-Agent", MOBILE_UA)
+                .build()
+            client.newCall(req).execute().close()
+        } catch (_: Exception) {
+        }
     }
 
     fun postJson(urlStr: String, token: String, bodyJson: String): String? {
@@ -235,6 +247,10 @@ object KtpQrUrlParser {
 class ProMetaStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("ktp_pro_glass_meta", Context.MODE_PRIVATE)
 
+    companion object {
+        private val metaCache = ConcurrentHashMap<String, StudentCourseMeta>()
+    }
+
     fun isLightTheme(): Boolean = prefs.getBoolean("is_light_theme", false)
 
     fun setLightTheme(light: Boolean) {
@@ -242,6 +258,12 @@ class ProMetaStore(private val context: Context) {
     }
 
     fun getStudentMeta(studentName: String): StudentCourseMeta {
+        metaCache[studentName]?.let { cached ->
+            return StudentCourseMeta(
+                semester = cached.semester,
+                courses = cached.courses.map { it.copy() }.toMutableList()
+            )
+        }
         val raw = prefs.getString("courses_$studentName", null) ?: return StudentCourseMeta()
         return try {
             val obj = JSONObject(raw)
@@ -260,7 +282,9 @@ class ProMetaStore(private val context: Context) {
                 )
             }
             list.sortByDescending { it.lastActiveTs }
-            StudentCourseMeta(sem, list)
+            val parsed = StudentCourseMeta(sem, list)
+            metaCache[studentName] = StudentCourseMeta(sem, list.map { it.copy() }.toMutableList())
+            parsed
         } catch (_: Exception) {
             StudentCourseMeta()
         }
@@ -268,6 +292,10 @@ class ProMetaStore(private val context: Context) {
 
     fun saveStudentMeta(studentName: String, meta: StudentCourseMeta) {
         meta.courses.sortByDescending { it.lastActiveTs }
+        metaCache[studentName] = StudentCourseMeta(
+            semester = meta.semester,
+            courses = meta.courses.map { it.copy() }.toMutableList()
+        )
         val arr = JSONArray()
         meta.courses.forEach { c ->
             arr.put(JSONObject().apply {
@@ -293,7 +321,13 @@ class ProMetaStore(private val context: Context) {
     }
 
     fun removeStudentMeta(studentName: String) {
+        metaCache.remove(studentName)
         prefs.edit().remove("courses_$studentName").apply()
+    }
+
+    fun clearAllMetaCache() {
+        metaCache.clear()
+        prefs.edit().clear().apply()
     }
 
     fun getGpsPreset(): GpsPreset? {
@@ -611,7 +645,7 @@ object KtpQrBatchEngine {
 
         val tasks = accounts.map { acc ->
             async(Dispatchers.IO) {
-                delay(Random.nextLong(100L, 340L))
+                delay(Random.nextLong(90L, 310L))
                 val res = executeSingleQr(metaStore, acc, qrRawUrl, gps)
                 onProgress(doneCounter.incrementAndGet(), accounts.size)
                 res
@@ -735,7 +769,7 @@ object KtpNumericCheckInEngine {
 
         val tasks = enabledList.map { acc ->
             async(Dispatchers.IO) {
-                delay(Random.nextLong(110L, 400L))
+                delay(Random.nextLong(100L, 360L))
                 val outcome = executeForSingleStudent(metaStore, acc, code, gps)
                 onProgress(doneCounter.incrementAndGet(), enabledList.size)
                 outcome

@@ -51,7 +51,7 @@ class ScanActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
     private lateinit var focusRingView: View
-    private lateinit var torchBtn: TextView
+    private lateinit var torchBtn: FrameLayout
     private var camera: androidx.camera.core.Camera? = null
     private var torchOn = false
     private var isProcessing = false
@@ -141,34 +141,37 @@ class ScanActivity : AppCompatActivity() {
             true
         }
 
-        val closeBtn = TextView(this).apply {
-            text = "✕"
-            textSize = 15f
-            setTypeface(null, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
+        val closeBtn = FrameLayout(this).apply {
             background = makeRoundGlass(0x770F172A, 0x55FFFFFF)
             setOnClickListener { finish() }
         }
+        closeBtn.addView(
+            View(this).apply { background = makeHudIcon(HudIconType.CLOSE) },
+            FrameLayout.LayoutParams(14.dp, 14.dp, Gravity.CENTER)
+        )
 
-        val galleryBtn = TextView(this).apply {
-            text = "🖼️ 相册识码"
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
+        val galleryBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
             val r = 20f.dpF
             val fill = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(0x880A84FF.toInt()) }
             val rim = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x77FFFFFF) }
             background = LayerDrawable(arrayOf<Drawable>(fill, rim))
-            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
+            setPadding(16.dp, 8.dp, 18.dp, 8.dp)
             setOnClickListener { pickGalleryLauncher.launch("image/*") }
         }
+        galleryBtn.addView(
+            View(this).apply { background = makeHudIcon(HudIconType.GALLERY) },
+            LinearLayout.LayoutParams(16.dp, 16.dp).apply { rightMargin = 6.dp }
+        )
+        galleryBtn.addView(TextView(this).apply {
+            text = "相册识码"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
 
-        torchBtn = TextView(this).apply {
-            text = "🔦"
-            textSize = 15f
-            gravity = Gravity.CENTER
+        torchBtn = FrameLayout(this).apply {
             background = makeRoundGlass(0x770F172A, 0x55FFFFFF)
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -178,6 +181,10 @@ class ScanActivity : AppCompatActivity() {
                 else makeRoundGlass(0x770F172A, 0x55FFFFFF)
             }
         }
+        torchBtn.addView(
+            View(this).apply { background = makeHudIcon(HudIconType.TORCH) },
+            FrameLayout.LayoutParams(17.dp, 17.dp, Gravity.CENTER)
+        )
 
         val zoomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -281,6 +288,58 @@ class ScanActivity : AppCompatActivity() {
         return LayerDrawable(arrayOf<Drawable>(fill, rim))
     }
 
+    private enum class HudIconType { CLOSE, GALLERY, TORCH }
+
+    private fun makeHudIcon(type: HudIconType): Drawable = object : Drawable() {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            p.strokeWidth = w * 0.12f
+            val pad = w * 0.14f
+
+            when (type) {
+                HudIconType.CLOSE -> {
+                    canvas.drawLine(pad, pad, w - pad, h - pad, p)
+                    canvas.drawLine(w - pad, pad, pad, h - pad, p)
+                }
+                HudIconType.GALLERY -> {
+                    canvas.drawRoundRect(RectF(pad, pad, w - pad, h - pad), w * 0.18f, w * 0.18f, p)
+                    val mountain = Path().apply {
+                        moveTo(pad + w * 0.08f, h - pad - h * 0.10f)
+                        lineTo(w * 0.42f, h * 0.48f)
+                        lineTo(w * 0.62f, h * 0.68f)
+                        lineTo(w * 0.74f, h * 0.56f)
+                        lineTo(w - pad - w * 0.08f, h - pad - h * 0.10f)
+                    }
+                    canvas.drawPath(mountain, p)
+                }
+                HudIconType.TORCH -> {
+                    val path = Path().apply {
+                        moveTo(w * 0.56f, pad)
+                        lineTo(w * 0.28f, h * 0.54f)
+                        lineTo(w * 0.50f, h * 0.54f)
+                        lineTo(w * 0.44f, h - pad)
+                        lineTo(w * 0.72f, h * 0.46f)
+                        lineTo(w * 0.50f, h * 0.46f)
+                        close()
+                    }
+                    canvas.drawPath(path, p)
+                }
+            }
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
     private fun applyZoomSmooth(targetRatio: Float) {
         zoomAnimator?.cancel()
         val startRatio = currentZoom
@@ -366,6 +425,24 @@ class ScanActivity : AppCompatActivity() {
             .build()
     )
 
+    private fun decodeSampledBitmap(uri: Uri, maxEdge: Int = 1280): Bitmap? {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        val w = opts.outWidth
+        val h = opts.outHeight
+        if (w <= 0 || h <= 0) return null
+
+        var sampleSize = 1
+        while (w / sampleSize > maxEdge || h / sampleSize > maxEdge) {
+            sampleSize *= 2
+        }
+        val decodeOpts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, decodeOpts) }
+    }
+
     private fun invertBitmap(src: Bitmap): Bitmap {
         val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
@@ -387,39 +464,42 @@ class ScanActivity : AppCompatActivity() {
         statusText.text = "正在解析图片中的二维码..."
         try {
             val scanner = buildScanner()
-            val image = InputImage.fromFilePath(this, uri)
-            scanner.process(image)
+            val sampledBmp = decodeSampledBitmap(uri)
+            if (sampledBmp == null) {
+                isProcessing = false
+                GlassIslandBanner.show(this, "无法读取所选图片", GlassIslandBanner.Tone.ERROR, false)
+                return
+            }
+
+            scanner.process(InputImage.fromBitmap(sampledBmp, 0))
                 .addOnSuccessListener { barcodes ->
                     val qr = barcodes.firstOrNull()?.rawValue
                     if (!qr.isNullOrEmpty() && isKetangpaiQr(qr)) {
+                        sampledBmp.recycle()
                         handleQrDetected(qr, "相册截图扫码", allowRescan = false)
                     } else {
-                        try {
-                            val rawBmp = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-                            if (rawBmp != null) {
-                                val invBmp = invertBitmap(rawBmp)
-                                scanner.process(InputImage.fromBitmap(invBmp, 0))
-                                    .addOnSuccessListener { invCodes ->
-                                        val invQr = invCodes.firstOrNull()?.rawValue
-                                        if (!invQr.isNullOrEmpty() && isKetangpaiQr(invQr)) {
-                                            handleQrDetected(invQr, "相册暗色截图识码", allowRescan = false)
-                                        } else {
-                                            isProcessing = false
-                                            statusText.text = "未在图片中识别到课堂派考勤二维码"
-                                            GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
-                                        }
-                                    }
-                                    .addOnFailureListener { isProcessing = false }
-                            } else {
-                                isProcessing = false
-                                GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
+                        val invBmp = invertBitmap(sampledBmp)
+                        sampledBmp.recycle()
+                        scanner.process(InputImage.fromBitmap(invBmp, 0))
+                            .addOnSuccessListener { invCodes ->
+                                val invQr = invCodes.firstOrNull()?.rawValue
+                                invBmp.recycle()
+                                if (!invQr.isNullOrEmpty() && isKetangpaiQr(invQr)) {
+                                    handleQrDetected(invQr, "相册暗色截图识码", allowRescan = false)
+                                } else {
+                                    isProcessing = false
+                                    statusText.text = "未在图片中识别到课堂派考勤二维码"
+                                    GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
+                                }
                             }
-                        } catch (_: Exception) {
-                            isProcessing = false
-                        }
+                            .addOnFailureListener {
+                                invBmp.recycle()
+                                isProcessing = false
+                            }
                     }
                 }
                 .addOnFailureListener {
+                    sampledBmp.recycle()
                     isProcessing = false
                     GlassIslandBanner.show(this, "图片解析失败", GlassIslandBanner.Tone.ERROR, false)
                 }
