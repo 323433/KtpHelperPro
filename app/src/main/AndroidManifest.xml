@@ -45,10 +45,7 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name=".CheckInForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+        
 
         <service
             android:name=".QuickScanTileService"

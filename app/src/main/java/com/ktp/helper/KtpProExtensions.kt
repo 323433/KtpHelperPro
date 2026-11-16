@@ -328,6 +328,98 @@ object KtpCourseSyncer {
     }
 }
 
+object KtpQrBatchEngine {
+
+    suspend fun checkTokenValid(token: String): Boolean = withContext(Dispatchers.IO) {
+        val resp = KtpHttpClient.postJson(
+            "https://openapiv5.ketangpai.com/CourseApi/semesterCourseList",
+            token,
+            """{"isstudy":"1","search":""}"""
+        ) ?: return@withContext false
+        return@withContext try {
+            val json = JSONObject(resp)
+            json.optInt("code", -1) == 10000 || json.optInt("status", -1) == 1
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun batchQrCheckIn(
+        context: Context,
+        accounts: List<Account>,
+        qrRawUrl: String,
+        onProgress: (done: Int, total: Int) -> Unit
+    ): Pair<Int, List<String>> = coroutineScope {
+        val gps = ProMetaStore(context).getGpsPreset()
+        var doneCount = 0
+
+        val tasks = accounts.map { acc ->
+            async(Dispatchers.IO) {
+                delay(Random.nextLong(110L, 380L))
+                val err = executeSingleQr(acc, qrRawUrl, gps)
+                synchronized(this@KtpQrBatchEngine) {
+                    doneCount++
+                    onProgress(doneCount, accounts.size)
+                }
+                err
+            }
+        }
+
+        val results = tasks.awaitAll()
+        var ok = 0
+        val failed = mutableListOf<String>()
+        results.forEach { err ->
+            if (err == null) ok++ else failed.add(err)
+        }
+        Pair(ok, failed)
+    }
+
+    private fun executeSingleQr(acc: Account, qrRawUrl: String, gps: GpsPreset?): String? {
+        return try {
+            val uri = Uri.parse(qrRawUrl)
+            val attId = uri.getQueryParameter("id")
+                ?: uri.getQueryParameter("attenceid")
+                ?: uri.getQueryParameter("signid")
+                ?: ""
+            if (attId.isEmpty()) return "${acc.name}(二维码链接缺少考勤ID)"
+
+            val payload = JSONObject().apply {
+                for (key in uri.queryParameterNames) {
+                    val v = uri.getQueryParameter(key)
+                    if (!v.isNullOrEmpty()) put(key, v)
+                }
+                put("id", attId)
+                put("attenceid", attId)
+                if (gps != null) {
+                    val latOffset = (Random.nextDouble() - 0.5) * 0.00014
+                    val lngOffset = (Random.nextDouble() - 0.5) * 0.00014
+                    put("latitude", String.format(Locale.US, "%.6f", gps.lat + latOffset))
+                    put("longitude", String.format(Locale.US, "%.6f", gps.lng + lngOffset))
+                }
+            }
+
+            val resp = KtpHttpClient.postJson(
+                "https://openapiv5.ketangpai.com/AttenceApi/checkin",
+                acc.token,
+                payload.toString()
+            ) ?: return "${acc.name}(请求超时)"
+
+            val json = JSONObject(resp)
+            val code = json.optInt("code", -1)
+            val status = json.optInt("status", -1)
+            val msg = json.optString("message", json.optString("msg", ""))
+
+            if (code == 10000 || status == 1 || msg.contains("成功") || msg.contains("已签到")) {
+                null
+            } else {
+                "${acc.name}(${msg.ifEmpty { "二维码已过期或签到失败" }})"
+            }
+        } catch (_: Exception) {
+            "${acc.name}(请求异常)"
+        }
+    }
+}
+
 object KtpNumericCheckInEngine {
 
     private sealed class SingleOutcome {

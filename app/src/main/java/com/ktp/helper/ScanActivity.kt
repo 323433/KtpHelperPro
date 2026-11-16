@@ -47,7 +47,6 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import kotlin.random.Random
 
 class ScanActivity : AppCompatActivity() {
 
@@ -68,6 +67,13 @@ class ScanActivity : AppCompatActivity() {
 
     private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera() else finish()
+    }
+
+    private val pickGalleryLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null && !isProcessing) {
+            isProcessing = true
+            scanFromImageUri(uri)
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -125,6 +131,20 @@ class ScanActivity : AppCompatActivity() {
             setOnClickListener { finish() }
         }
 
+        val galleryBtn = TextView(this).apply {
+            text = "🖼️ 相册识码"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            val r = 20f * resources.displayMetrics.density
+            val fill = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(0x770A84FF) }
+            val rim = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x77FFFFFF) }
+            background = LayerDrawable(arrayOf<Drawable>(fill, rim))
+            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
+            setOnClickListener { pickGalleryLauncher.launch("image/*") }
+        }
+
         val torchBtn = TextView(this).apply {
             text = "🔦"
             textSize = 16f
@@ -167,6 +187,9 @@ class ScanActivity : AppCompatActivity() {
             leftMargin = 20.dp
             topMargin = 36.dp
         })
+        root.addView(galleryBtn, FrameLayout.LayoutParams(-2, 40.dp, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = 36.dp
+        })
         root.addView(torchBtn, FrameLayout.LayoutParams(40.dp, 40.dp, Gravity.TOP or Gravity.END).apply {
             rightMargin = 20.dp
             topMargin = 36.dp
@@ -180,6 +203,7 @@ class ScanActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             val imageUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             if (imageUri != null) {
+                isProcessing = true
                 scanFromImageUri(imageUri)
                 return
             }
@@ -265,22 +289,26 @@ class ScanActivity : AppCompatActivity() {
     )
 
     private fun scanFromImageUri(uri: Uri) {
-        statusText.text = "正在解析分享图片中的二维码..."
+        statusText.text = "正在解析图片中的二维码..."
         try {
             val image = InputImage.fromFilePath(this, uri)
             buildScanner().process(image)
                 .addOnSuccessListener { barcodes ->
                     val qr = barcodes.firstOrNull()?.rawValue
                     if (!qr.isNullOrEmpty() && isKetangpaiQr(qr)) {
-                        handleQrDetected(qr, "分享截图扫码", allowRescan = false)
+                        handleQrDetected(qr, "相册截图扫码", allowRescan = false)
                     } else {
-                        Toast.makeText(this, "未在图片中识别到课堂派考勤二维码", Toast.LENGTH_SHORT).show()
-                        finish()
+                        isProcessing = false
+                        statusText.text = "未在图片中识别到课堂派考勤二维码"
+                        Toast.makeText(this, "未识别到课堂派考勤二维码", Toast.LENGTH_SHORT).show()
                     }
                 }
-                .addOnFailureListener { finish() }
+                .addOnFailureListener {
+                    isProcessing = false
+                    Toast.makeText(this, "图片解析失败", Toast.LENGTH_SHORT).show()
+                }
         } catch (_: Exception) {
-            finish()
+            isProcessing = false
         }
     }
 
@@ -289,8 +317,8 @@ class ScanActivity : AppCompatActivity() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
+            val preview = Preview.Builder().build().also { p ->
+                p.setSurfaceProvider(previewView.surfaceProvider)
             }
             val scanner = buildScanner()
             val analysis = ImageAnalysis.Builder()
@@ -344,22 +372,21 @@ class ScanActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val tag = if (autoRescanCount > 0) "捕获新码 · 正在为剩余 ${targetAccounts.size} 人补签..." else "捕获成功 · 正在并发提交 (${targetAccounts.size}人)..."
             statusText.text = tag
-            delay(Random.nextLong(140L, 420L))
-            
-            val (okCount, failed) = KtpApiClient.batchCheckIn(
+
+            val (okCount, failed) = KtpQrBatchEngine.batchQrCheckIn(
+                context = this@ScanActivity,
                 accounts = targetAccounts,
-                qrRawUrl = qrContent,
-                onProgress = { done, total ->
-                    runOnUiThread { statusText.text = "正在并发提交 ($done/$total)..." }
-                }
-            )
-            
+                qrRawUrl = qrContent
+            ) { done, total ->
+                runOnUiThread { statusText.text = "正在并发提交 ($done/$total)..." }
+            }
+
             val cost = System.currentTimeMillis() - startMs
 
-            val hasExpiredFailure = failed.any { it.contains("过期") || it.contains("失效") || it.contains("刷新") }
+            val hasExpiredFailure = failed.any { msg -> msg.contains("过期") || msg.contains("失效") || msg.contains("刷新") }
             if (allowRescan && autoRescanCount < 1 && hasExpiredFailure) {
                 val remainAccounts = targetAccounts.filter { acc ->
-                    failed.any { it.startsWith(acc.name) }
+                    failed.any { msg -> msg.startsWith(acc.name) }
                 }
                 if (remainAccounts.isNotEmpty()) {
                     pendingRetryAccounts = remainAccounts
@@ -371,7 +398,7 @@ class ScanActivity : AppCompatActivity() {
                     delay(4000L)
                     if (!isFinishing && !isProcessing) {
                         val summary = "部分成功 $okCount 人 · 续扫超时"
-                        val detail = "未补签: ${remainAccounts.joinToString { it.name }}"
+                        val detail = "未补签: ${remainAccounts.joinToString(separator = ", ") { acc -> acc.name }}"
                         ProMetaStore(this@ScanActivity).addRecord(modeLabel, summary, detail)
                         Toast.makeText(this@ScanActivity, "$summary ($detail)", Toast.LENGTH_LONG).show()
                         finish()
@@ -384,13 +411,13 @@ class ScanActivity : AppCompatActivity() {
             val finalMode = if (autoRescanCount > 0) "$modeLabel(含自动续扫)" else modeLabel
             val summary = "成功 $okCount 人 · 耗时 ${cost}ms"
             val detailParts = mutableListOf<String>()
-            if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString()}")
-            if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString()}")
-            val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(" | ")
+            if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString(separator = ", ")}")
+            if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString(separator = ", ")}")
+            val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(separator = " | ")
             ProMetaStore(this@ScanActivity).addRecord(finalMode, summary, detail)
 
             val msg = if (failed.isEmpty()) "全员签到成功 ($okCount 人) · 耗时 ${cost}ms"
-            else "成功 $okCount 人，失败: ${failed.joinToString()}"
+            else "成功 $okCount 人，失败: ${failed.joinToString(separator = ", ")}"
             Toast.makeText(this@ScanActivity, msg, Toast.LENGTH_LONG).show()
             finish()
         }

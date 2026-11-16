@@ -1,21 +1,16 @@
 package com.ktp.helper
 
-import android.Manifest
 import android.animation.ValueAnimator
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.*
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
 import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
@@ -25,12 +20,8 @@ import android.view.animation.DecelerateInterpolator
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.random.Random
 
 class MainActivity : AppCompatActivity() {
 
@@ -122,9 +113,6 @@ class MainActivity : AppCompatActivity() {
             navigationBarColor = if (isLight) 0xFFEEF2F9.toInt() else 0xFF070B14.toInt()
         }
 
-        requestRuntimePermissions()
-        // removed foreground service
-
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
         val textSecondary = if (isLight) 0xFF475569.toInt() else 0x99EBEBF5.toInt()
 
@@ -204,7 +192,7 @@ class MainActivity : AppCompatActivity() {
             }
         }, LinearLayout.LayoutParams(7.dp, 7.dp))
         statusPill.addView(TextView(this).apply {
-            text = "守护中"
+            text = "轻量版"
             textSize = 11.5f
             setTypeface(null, Typeface.BOLD)
             setTextColor(textPrimary)
@@ -302,7 +290,7 @@ class MainActivity : AppCompatActivity() {
         statsCard.addView(statsRow)
 
         statsCard.addView(TextView(this).apply {
-            text = "🔒 HTTP/2 并发池 · 支持动态二维码续扫、免码口令提取与单课过滤"
+            text = "🔒 零后台零耗电 · HTTP/2 并发池 · 支持相册识码续扫与单课过滤"
             textSize = 11f
             setTextColor(textSecondary)
             setPadding(0, 6.dp, 0, 0)
@@ -357,7 +345,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
         })
         heroTextCol.addView(TextView(this).apply {
-            text = "白名单防误触 · 点击对焦 · 刷新自动续扫"
+            text = "现场扫码 · 相册截图识码 · 刷新自动续扫"
             textSize = 12f
             setTextColor(0xE6E0F2FE.toInt())
             setPadding(0, 2.dp, 0, 0)
@@ -476,8 +464,8 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 6.dp }
         )
         gridRow2.addView(
-            buildGlassTile(SfIconType.BOLT, 0xFFFF9F0A.toInt(), "后台保活", "关闭系统电池优化") {
-                requestIgnoreBatteryOptimizations()
+            buildGlassTile(SfIconType.BOLT, 0xFFFF9F0A.toInt(), "免码抢签", "一键嗅探进行中签到") {
+                executeNumericCheckIn("AUTO")
             },
             LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = 6.dp }
         )
@@ -593,15 +581,15 @@ class MainActivity : AppCompatActivity() {
 
             val summary = "成功 ${result.okCount} 人 · 耗时 ${cost}ms"
             val detailParts = mutableListOf<String>()
-            if (result.failed.isNotEmpty()) detailParts.add("未成功: ${result.failed.joinToString()}")
-            if (result.skipped.isNotEmpty()) detailParts.add("已跳过: ${result.skipped.joinToString()}")
-            val detail = if (detailParts.isEmpty()) "参与全员均已完成数字签到" else detailParts.joinToString(" | ")
+            if (result.failed.isNotEmpty()) detailParts.add("未成功: ${result.failed.joinToString(separator = ", ")}")
+            if (result.skipped.isNotEmpty()) detailParts.add("已跳过: ${result.skipped.joinToString(separator = ", ")}")
+            val detail = if (detailParts.isEmpty()) "参与全员均已完成数字签到" else detailParts.joinToString(separator = " | ")
 
             val modeTag = if (code == "AUTO") "数字口令(免码提取)" else "数字口令($code)"
             metaStore.addRecord(modeTag, summary, detail)
 
             val failedAccounts = targetList.filter { acc ->
-                result.failed.any { it.startsWith(acc.name) }
+                result.failed.any { msg -> msg.startsWith(acc.name) }
             }
 
             val builder = AlertDialog.Builder(this@MainActivity)
@@ -966,22 +954,22 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "正在为 ${targetAccounts.size} 位同学并发提交...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val startMs = System.currentTimeMillis()
-            delay(Random.nextLong(150L, 480L))
-            val (okCount, failed) = KtpApiClient.batchCheckIn(
+            val (okCount, failed) = KtpQrBatchEngine.batchQrCheckIn(
+                context = this@MainActivity,
                 accounts = targetAccounts,
                 qrRawUrl = rawUrl
             ) { _, _ -> }
             val cost = System.currentTimeMillis() - startMs
             val summary = "成功 $okCount 人 · 耗时 ${cost}ms"
             val detailParts = mutableListOf<String>()
-            if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString()}")
-            if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString()}")
-            val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(" | ")
+            if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString(separator = ", ")}")
+            if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString(separator = ", ")}")
+            val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(separator = " | ")
 
             metaStore.addRecord(modeLabel, summary, detail)
 
             val failedAccounts = targetAccounts.filter { acc ->
-                failed.any { it.startsWith(acc.name) }
+                failed.any { msg -> msg.startsWith(acc.name) }
             }
 
             val builder = AlertDialog.Builder(this@MainActivity)
@@ -1008,7 +996,7 @@ class MainActivity : AppCompatActivity() {
                 .show()
             return
         }
-        val text = records.joinToString("\n\n") { r ->
+        val text = records.joinToString(separator = "\n\n") { r ->
             "【${r.time}】${r.mode}\n${r.summary}\n${r.detail}"
         }
         AlertDialog.Builder(this)
@@ -1027,12 +1015,12 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val accounts = store.getAccounts()
             accounts.forEach { acc ->
-                acc.isValid = KtpApiClient.checkTokenValid(acc.token)
+                acc.isValid = KtpQrBatchEngine.checkTokenValid(acc.token)
             }
             store.saveAccounts(accounts)
             renderAccountList()
-            val expired = accounts.filter { !it.isValid }.map { it.name }
-            val msg = if (expired.isEmpty()) "全员 Token 均正常有效！" else "以下同学凭证已过期，请展开卡片点「更新凭证」：${expired.joinToString()}"
+            val expired = accounts.filter { !it.isValid }.map { acc -> acc.name }
+            val msg = if (expired.isEmpty()) "全员 Token 均正常有效！" else "以下同学凭证已过期，请展开卡片点「更新凭证」：${expired.joinToString(separator = ", ")}"
             AlertDialog.Builder(this@MainActivity).setTitle("状态体检结果").setMessage(msg).setPositiveButton("确定", null).show()
         }
     }
@@ -1110,31 +1098,6 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
-    }
-
-    private fun requestRuntimePermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
-        }
-    }
-
-    private fun requestIgnoreBatteryOptimizations() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
-            }
-            startActivity(intent)
-        } else {
-            Toast.makeText(this, "已处于后台白名单中", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun // removed foreground service {
-        val intent = Intent(this, CheckInForegroundService::class.java)
-        ContextCompat.startForegroundService(this, intent)
     }
 
     private fun makeBackdropDrawable(): Drawable = object : Drawable() {
