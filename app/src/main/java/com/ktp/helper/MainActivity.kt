@@ -1924,7 +1924,6 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, 2.dp, 0, 0)
             })
 
-            // 过期一键直达重登微徽章
             val expiredChip: TextView? = if (!acc.isValid) {
                 TextView(this).apply {
                     text = "重登"
