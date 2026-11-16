@@ -90,8 +90,8 @@ class WebLoginActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
-        val sandboxPill = TextView(this).apply {
-            text = "🔒 隔离沙盒"
+        val tokenPill = TextView(this).apply {
+            text = "🔑 粘贴Token"
             textSize = 11f
             setTypeface(null, Typeface.BOLD)
             setTextColor(0xFF30D158.toInt())
@@ -101,10 +101,11 @@ class WebLoginActivity : AppCompatActivity() {
                 setColor(0x2230D158)
             }
             setPadding(8.dp, 5.dp, 8.dp, 5.dp)
+            setOnClickListener { promptDirectTokenSheet() }
         }
         topBar.addView(backBtn)
         topBar.addView(barTitle, LinearLayout.LayoutParams(0, -2, 1f))
-        topBar.addView(sandboxPill)
+        topBar.addView(tokenPill)
 
         val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
@@ -181,6 +182,75 @@ class WebLoginActivity : AppCompatActivity() {
         }, 2100)
     }
 
+    private fun promptDirectTokenSheet() {
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = false,
+            title = "粘贴 Token 直录成员",
+            subtitle = "适合从微信/QQ直接粘贴室友发来的登录凭证",
+            badgeColor = 0xFF0A84FF.toInt(),
+            glyphType = SheetGlyphType.KEYPAD
+        )
+        val body = sheet.getBody()
+        val nameInput = EditText(this).apply {
+            hint = "成员姓名（如：李四）"
+            setText(presetName ?: "")
+            setTextColor(Color.WHITE)
+            setHintTextColor(0x66FFFFFF)
+            textSize = 14.5f
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 14f.dpF
+                setColor(0x22FFFFFF)
+            }
+            setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+        }
+        val tokenInput = EditText(this).apply {
+            hint = "粘贴 Ketangpai Token 字符串..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(0x66FFFFFF)
+            textSize = 13.5f
+            minLines = 2
+            maxLines = 4
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 14f.dpF
+                setColor(0x22FFFFFF)
+            }
+            setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+        }
+        body.addView(nameInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10.dp })
+        body.addView(tokenInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16.dp })
+
+        val okBtn = TextView(this).apply {
+            text = "保存并同步课表"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(0xFF0A84FF.toInt(), 0xFF0055D4.toInt())
+            ).apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 16f.dpF
+            }
+            setPadding(0, 14.dp, 0, 14.dp)
+            setOnClickListener {
+                val tk = tokenInput.text.toString().trim().trim('"')
+                val nm = nameInput.text.toString().trim().ifEmpty { "同学_${System.currentTimeMillis() % 1000}" }
+                if (tk.length > 15) {
+                    captured = true
+                    sheet.dismiss { saveAndSyncCourses(nm, tk) }
+                } else {
+                    GlassIslandBanner.show(this@WebLoginActivity, "Token 长度无效，请检查是否完整复制", GlassIslandBanner.Tone.WARN, false)
+                }
+            }
+        }
+        body.addView(okBtn)
+        sheet.show()
+    }
+
     private fun promptStudentNameSheet(token: String) {
         val sheet = GlassBottomSheet(
             context = this,
@@ -188,7 +258,7 @@ class WebLoginActivity : AppCompatActivity() {
             title = "登录凭证提取成功",
             subtitle = "保存后将自动拉取该同学本学期全部课程",
             badgeColor = 0xFF30D158.toInt(),
-            badgeGlyph = "✓"
+            glyphType = SheetGlyphType.CHECK
         )
         val body = sheet.getBody()
         val input = EditText(this).apply {

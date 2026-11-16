@@ -5,8 +5,6 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
-    <!-- 安全区内磨砂玻璃卡片 -->
     <path
         android:fillAlpha="0.18"
         android:fillColor="#FFFFFF"
@@ -14,8 +12,6 @@
         android:strokeAlpha="0.48"
         android:strokeColor="#FFFFFF"
         android:pathData="M33,25 L75,25 Q83,25 83,33 L83,75 Q83,83 75,83 L33,83 Q25,83 25,75 L25,33 Q25,25 33,25 Z" />
-
-    <!-- 四角极速扫码取景框 -->
     <path
         android:fillColor="#00000000"
         android:strokeWidth="3.6"
@@ -23,8 +19,6 @@
         android:strokeLineJoin="round"
         android:strokeColor="#FFFFFF"
         android:pathData="M34.5,43.5 L34.5,34.5 L43.5,34.5 M64.5,34.5 L73.5,34.5 L73.5,43.5 M34.5,64.5 L34.5,73.5 L43.5,73.5 M64.5,73.5 L73.5,73.5 L73.5,64.5" />
-
-    <!-- 渐变青绿极速闪电 -->
     <path android:pathData="M57.5,36.5 L43,56 L53.5,56 L50.5,71.5 L65,52 L54.5,52 Z">
         <aapt:attr name="android:fillColor">
             <gradient

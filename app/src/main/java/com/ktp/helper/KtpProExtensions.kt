@@ -1,14 +1,19 @@
 package com.ktp.helper
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
+import android.location.LocationManager
 import android.os.Build
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -75,6 +80,8 @@ data class PendingScanReport(
 
 object KtpHttpClient {
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+    private const val MOBILE_UA =
+        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
     val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -92,6 +99,10 @@ object KtpHttpClient {
             val req = Request.Builder()
                 .url(urlStr)
                 .header("token", token)
+                .header("User-Agent", MOBILE_UA)
+                .header("Origin", "https://w.ketangpai.com")
+                .header("Referer", "https://w.ketangpai.com/")
+                .header("Accept", "application/json, text/plain, */*")
                 .header("Content-Type", "application/json;charset=UTF-8")
                 .post(bodyJson.toRequestBody(JSON_MEDIA))
                 .build()
@@ -109,6 +120,9 @@ object CheckInCooldownGuard {
 
     fun tryAcquire(key: String, cooldownMs: Long = 3000L): Boolean {
         val now = System.currentTimeMillis()
+        if (recentKeys.size > 32) {
+            recentKeys.entries.removeIf { now - it.value > 15_000L }
+        }
         val last = recentKeys[key]
         if (last != null && now - last < cooldownMs) {
             return false
@@ -119,9 +133,27 @@ object CheckInCooldownGuard {
 }
 
 object KtpQrUrlParser {
-    fun parseParams(rawInput: String): Map<String, String> {
+    fun parseParams(rawInput: String, depth: Int = 0): Map<String, String> {
         val map = linkedMapOf<String, String>()
+        if (depth > 2) return map
         val trimmed = rawInput.trim()
+
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            try {
+                val obj = JSONObject(trimmed)
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = obj.optString(k, "")
+                    if (v.isNotEmpty()) {
+                        map[k] = v
+                        map[k.lowercase(Locale.US)] = v
+                    }
+                }
+                return map
+            } catch (_: Exception) {
+            }
+        }
 
         val parts = trimmed.split("#")
         for (part in parts) {
@@ -141,6 +173,12 @@ object KtpQrUrlParser {
                         if (decodedVal.isNotEmpty()) {
                             map[rawKey] = decodedVal
                             map[rawKey.lowercase(Locale.US)] = decodedVal
+                            val lk = rawKey.lowercase(Locale.US)
+                            if (lk in listOf("redirect", "url", "target", "return_url", "next") &&
+                                (decodedVal.contains("?") || decodedVal.contains("#"))
+                            ) {
+                                map.putAll(parseParams(decodedVal, depth + 1))
+                            }
                         }
                     }
                 }
@@ -157,7 +195,7 @@ object KtpQrUrlParser {
     }
 
     fun extractAttenceId(params: Map<String, String>): String {
-        val keys = listOf("id", "attenceid", "signid", "checkinid", "checkin_id", "aid", "path_id")
+        val keys = listOf("id", "attenceid", "attence_id", "signid", "sign_id", "checkinid", "checkin_id", "aid", "path_id")
         for (k in keys) {
             val v = params[k]
             if (!v.isNullOrEmpty() && v.all { ch -> ch.isDigit() }) {
@@ -181,20 +219,20 @@ object KtpQrUrlParser {
     }
 
     fun extractDynamicCode(rawInput: String, params: Map<String, String>): String {
-        val keys = listOf("code", "sign", "signcode", "verify_code", "qrcode", "token", "key", "t")
+        val keys = listOf("code", "sign", "signcode", "sign_code", "verify_code", "qrcode", "token", "key", "t")
         for (k in keys) {
             val v = params[k]
             if (!v.isNullOrEmpty()) return v
         }
         val trimmed = rawInput.trim()
-        if (!trimmed.startsWith("http", ignoreCase = true) && trimmed.length in 4..64) {
+        if (!trimmed.startsWith("http", ignoreCase = true) && !trimmed.startsWith("{") && trimmed.length in 4..64) {
             return trimmed
         }
         return params["path_id"] ?: ""
     }
 }
 
-class ProMetaStore(context: Context) {
+class ProMetaStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("ktp_pro_glass_meta", Context.MODE_PRIVATE)
 
     fun isLightTheme(): Boolean = prefs.getBoolean("is_light_theme", false)
@@ -265,16 +303,84 @@ class ProMetaStore(context: Context) {
         return GpsPreset(label, lat, lng)
     }
 
+    fun getGpsPresets(): List<GpsPreset> {
+        val raw = prefs.getString("gps_presets_list", "[]") ?: "[]"
+        val list = mutableListOf<GpsPreset>()
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val l = o.optString("label")
+                val la = o.optDouble("lat", Double.NaN)
+                val ln = o.optDouble("lng", Double.NaN)
+                if (l.isNotEmpty() && !la.isNaN() && !ln.isNaN()) {
+                    list.add(GpsPreset(l, la, ln))
+                }
+            }
+        } catch (_: Exception) {
+        }
+        val current = getGpsPreset()
+        if (current != null && list.none { it.label == current.label }) {
+            list.add(0, current)
+        }
+        return list
+    }
+
     fun saveGpsPreset(label: String, lat: Double, lng: Double) {
+        val existing = getGpsPresets().filterNot { it.label == label }.toMutableList()
+        existing.add(0, GpsPreset(label, lat, lng))
+        val arr = JSONArray()
+        existing.take(6).forEach { p ->
+            arr.put(JSONObject().apply {
+                put("label", p.label)
+                put("lat", p.lat)
+                put("lng", p.lng)
+            })
+        }
         prefs.edit()
             .putString("gps_label", label)
             .putString("gps_lat", lat.toString())
             .putString("gps_lng", lng.toString())
+            .putString("gps_presets_list", arr.toString())
             .apply()
+    }
+
+    fun removeGpsPreset(label: String) {
+        val remaining = getGpsPresets().filterNot { it.label == label }
+        val arr = JSONArray()
+        remaining.forEach { p ->
+            arr.put(JSONObject().apply {
+                put("label", p.label)
+                put("lat", p.lat)
+                put("lng", p.lng)
+            })
+        }
+        val ed = prefs.edit().putString("gps_presets_list", arr.toString())
+        if (getGpsPreset()?.label == label) {
+            ed.remove("gps_label").remove("gps_lat").remove("gps_lng")
+        }
+        ed.apply()
     }
 
     fun clearGpsPreset() {
         prefs.edit().remove("gps_label").remove("gps_lat").remove("gps_lng").apply()
+    }
+
+    @SuppressLint("MissingPermission")
+    fun resolveEffectiveGps(): GpsPreset? {
+        getGpsPreset()?.let { return it }
+        return try {
+            val fineOk = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val coarseOk = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            if (!fineOk && !coarseOk) return null
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: return null
+            GpsPreset("当前位置", loc.latitude, loc.longitude)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun getRecords(): List<CheckInRecord> {
@@ -475,17 +581,21 @@ object KtpQrBatchEngine {
     }
 
     suspend fun checkTokenValid(token: String): Boolean = withContext(Dispatchers.IO) {
-        val resp = KtpHttpClient.postJson(
-            "https://openapiv5.ketangpai.com/CourseApi/semesterCourseList",
-            token,
-            """{"isstudy":"1","search":""}"""
-        ) ?: return@withContext false
-        return@withContext try {
-            val json = JSONObject(resp)
-            json.optInt("code", -1) == 10000 || json.optInt("status", -1) == 1
-        } catch (_: Exception) {
-            false
+        val checkUrls = listOf(
+            "https://openapiv5.ketangpai.com/CourseApi/semesterCourseList" to """{"isstudy":"1","search":""}""",
+            "https://openapiv5.ketangpai.com/UserApi/getUserInfo" to "{}"
+        )
+        for ((url, body) in checkUrls) {
+            val resp = KtpHttpClient.postJson(url, token, body) ?: continue
+            try {
+                val json = JSONObject(resp)
+                if (json.optInt("code", -1) == 10000 || json.optInt("status", -1) == 1) {
+                    return@withContext true
+                }
+            } catch (_: Exception) {
+            }
         }
+        false
     }
 
     suspend fun batchQrCheckIn(
@@ -496,12 +606,12 @@ object KtpQrBatchEngine {
     ): Pair<Int, List<String>> = coroutineScope {
         val metaStore = ProMetaStore(context)
         metaStore.saveLastTask("QR", qrRawUrl)
-        val gps = metaStore.getGpsPreset()
+        val gps = metaStore.resolveEffectiveGps()
         val doneCounter = AtomicInteger(0)
 
         val tasks = accounts.map { acc ->
             async(Dispatchers.IO) {
-                delay(Random.nextLong(100L, 350L))
+                delay(Random.nextLong(100L, 340L))
                 val res = executeSingleQr(metaStore, acc, qrRawUrl, gps)
                 onProgress(doneCounter.incrementAndGet(), accounts.size)
                 res
@@ -558,9 +668,11 @@ object KtpQrBatchEngine {
                 }
                 put("id", attId)
                 put("attenceid", attId)
+                put("attence_id", attId)
                 if (dynCode.isNotEmpty()) {
                     if (!has("code")) put("code", dynCode)
                     if (!has("sign")) put("sign", dynCode)
+                    if (!has("qrcode")) put("qrcode", dynCode)
                 }
                 if (gps != null) {
                     val latOffset = (Random.nextDouble() - 0.5) * 0.00014
@@ -618,7 +730,7 @@ object KtpNumericCheckInEngine {
         val enabledList = accounts.filter { it.enabled }
         val metaStore = ProMetaStore(context)
         metaStore.saveLastTask("NUM", code)
-        val gps = metaStore.getGpsPreset()
+        val gps = metaStore.resolveEffectiveGps()
         val doneCounter = AtomicInteger(0)
 
         val tasks = enabledList.map { acc ->
@@ -672,6 +784,7 @@ object KtpNumericCheckInEngine {
         val payload = JSONObject().apply {
             put("id", attenceId)
             put("attenceid", attenceId)
+            put("attence_id", attenceId)
             put("code", finalCode)
             put("sign", finalCode)
             if (gps != null) {

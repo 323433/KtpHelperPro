@@ -366,19 +366,57 @@ class ScanActivity : AppCompatActivity() {
             .build()
     )
 
+    private fun invertBitmap(src: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint()
+        val cm = ColorMatrix(
+            floatArrayOf(
+                -1f, 0f, 0f, 0f, 255f,
+                0f, -1f, 0f, 0f, 255f,
+                0f, 0f, -1f, 0f, 255f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        paint.colorFilter = ColorMatrixColorFilter(cm)
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return out
+    }
+
     private fun scanFromImageUri(uri: Uri) {
         statusText.text = "正在解析图片中的二维码..."
         try {
+            val scanner = buildScanner()
             val image = InputImage.fromFilePath(this, uri)
-            buildScanner().process(image)
+            scanner.process(image)
                 .addOnSuccessListener { barcodes ->
                     val qr = barcodes.firstOrNull()?.rawValue
                     if (!qr.isNullOrEmpty() && isKetangpaiQr(qr)) {
                         handleQrDetected(qr, "相册截图扫码", allowRescan = false)
                     } else {
-                        isProcessing = false
-                        statusText.text = "未在图片中识别到课堂派考勤二维码"
-                        GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
+                        try {
+                            val rawBmp = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                            if (rawBmp != null) {
+                                val invBmp = invertBitmap(rawBmp)
+                                scanner.process(InputImage.fromBitmap(invBmp, 0))
+                                    .addOnSuccessListener { invCodes ->
+                                        val invQr = invCodes.firstOrNull()?.rawValue
+                                        if (!invQr.isNullOrEmpty() && isKetangpaiQr(invQr)) {
+                                            handleQrDetected(invQr, "相册暗色截图识码", allowRescan = false)
+                                        } else {
+                                            isProcessing = false
+                                            statusText.text = "未在图片中识别到课堂派考勤二维码"
+                                            GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
+                                        }
+                                    }
+                                    .addOnFailureListener { isProcessing = false }
+                            } else {
+                                isProcessing = false
+                                GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
+                            }
+                        } catch (_: Exception) {
+                            isProcessing = false
+                        }
                     }
                 }
                 .addOnFailureListener {

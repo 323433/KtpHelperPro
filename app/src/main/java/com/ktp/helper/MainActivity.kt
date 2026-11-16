@@ -419,7 +419,7 @@ class MainActivity : AppCompatActivity() {
         statsCard.addView(statsRow)
 
         statsCard.addView(TextView(this).apply {
-            text = "🔒 零后台零耗电 · HTTP/2 并发池 · 长按课程胶囊可开启单课专注"
+            text = "🔒 零后台零耗电 · HTTP/2 并发 · 长按课程单选"
             textSize = 11f
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -488,7 +488,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 带脉冲雷达波纹的扫码图标容器
         val heroIconContainer = FrameLayout(this)
         val radarPulseRing = View(this).apply {
             background = GradientDrawable().apply {
@@ -727,7 +726,6 @@ class MainActivity : AppCompatActivity() {
         renderAccountList(animateEntrance = !hasAnimatedEntrance)
         hasAnimatedEntrance = true
 
-        // 接收 ScanActivity 传递过来的战报，自动弹出毛玻璃战报抽屉
         val pendingReport = metaStore.consumePendingScanReport()
         if (pendingReport != null) {
             val allAccounts = store.getAccounts()
@@ -778,7 +776,7 @@ class MainActivity : AppCompatActivity() {
             title = "数字口令代签",
             subtitle = "输满 4 位自动并发提交 · 或直接免码嗅探",
             badgeColor = 0xFF0A84FF.toInt(),
-            badgeGlyph = "🔢"
+            glyphType = SheetGlyphType.KEYPAD
         )
         val body = sheet.getBody()
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
@@ -879,22 +877,32 @@ class MainActivity : AppCompatActivity() {
             arrayOf("1", "2", "3"),
             arrayOf("4", "5", "6"),
             arrayOf("7", "8", "9"),
-            arrayOf("清空", "0", "⌫")
+            arrayOf("清空", "0", "BACK")
         )
 
         for (r in keys.indices) {
             val rowLayout = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (c in 0 until 3) {
                 val label = keys[r][c]
-                val isActionKey = (label == "清空" || label == "⌫")
-                val keyBtn = TextView(this).apply {
-                    text = label
-                    textSize = if (isActionKey) 14f else 21f
-                    fontFeatureSettings = "tnum"
-                    setTypeface(null, Typeface.BOLD)
-                    gravity = Gravity.CENTER
-                    setTextColor(if (isActionKey) textSecondary else textPrimary)
-                    background = makeBevelGlassSurface(16f, 0x28, 0x12, 0x45)
+                val isActionKey = (label == "清空" || label == "BACK")
+                val keyBtn: View = if (label == "BACK") {
+                    FrameLayout(this).apply {
+                        background = makeBevelGlassSurface(16f, 0x28, 0x12, 0x45)
+                        addView(
+                            View(this@MainActivity).apply { background = makeBackspaceDrawable(textSecondary) },
+                            FrameLayout.LayoutParams(22.dp, 16.dp, Gravity.CENTER)
+                        )
+                    }
+                } else {
+                    TextView(this).apply {
+                        text = label
+                        textSize = if (isActionKey) 14f else 21f
+                        fontFeatureSettings = "tnum"
+                        setTypeface(null, Typeface.BOLD)
+                        gravity = Gravity.CENTER
+                        setTextColor(if (isActionKey) textSecondary else textPrimary)
+                        background = makeBevelGlassSurface(16f, 0x28, 0x12, 0x45)
+                    }
                 }
                 attachSpringTouch(keyBtn, 0.93f) { v ->
                     if (isLockedSubmitting) return@attachSpringTouch
@@ -904,7 +912,7 @@ class MainActivity : AppCompatActivity() {
                             codeBuffer = ""
                             refreshPinBoxes()
                         }
-                        "⌫" -> {
+                        "BACK" -> {
                             if (codeBuffer.isNotEmpty()) {
                                 codeBuffer = codeBuffer.dropLast(1)
                                 refreshPinBoxes()
@@ -944,7 +952,7 @@ class MainActivity : AppCompatActivity() {
         val gpsSub = if (currentGps != null) {
             "${currentGps.label} (${String.format(Locale.US, "%.4f, %.4f", currentGps.lat, currentGps.lng)})"
         } else {
-            "未设置 · 点击采集当前教室定位或手动输入"
+            "未设置 · 点击采集当前教室定位或切换常用教学楼"
         }
 
         val sheet = GlassBottomSheet(
@@ -953,12 +961,12 @@ class MainActivity : AppCompatActivity() {
             title = "地点预设与配置流转",
             subtitle = "定位防雷同偏移 · 寝室全组配置一键互通",
             badgeColor = 0xFF5E5CE6.toInt(),
-            badgeGlyph = "📍"
+            glyphType = SheetGlyphType.PIN
         )
 
         sheet.addRowCard(
             context = this,
-            glyph = "📡",
+            glyphType = SheetGlyphType.PIN,
             glyphBg = 0xFF0A84FF.toInt(),
             title = "教学楼 GPS 坐标预设",
             sub = gpsSub
@@ -968,7 +976,7 @@ class MainActivity : AppCompatActivity() {
 
         sheet.addRowCard(
             context = this,
-            glyph = "📤",
+            glyphType = SheetGlyphType.LINK,
             glyphBg = 0xFF30D158.toInt(),
             title = "复制全组配置到剪贴板",
             sub = "导出当前全员加密凭证，发到寝室群给室友接管"
@@ -982,7 +990,7 @@ class MainActivity : AppCompatActivity() {
 
         sheet.addRowCard(
             context = this,
-            glyph = "📥",
+            glyphType = SheetGlyphType.CHECK,
             glyphBg = 0xFFFF9F0A.toInt(),
             title = "从剪贴板导入室友配置",
             sub = "自动识别剪贴板配置串并同步到本地账号池"
@@ -1001,7 +1009,7 @@ class MainActivity : AppCompatActivity() {
 
         sheet.addRowCard(
             context = this,
-            glyph = "🗑️",
+            glyphType = SheetGlyphType.ALERT,
             glyphBg = 0xFFFF453A.toInt(),
             title = "清空本机所有本地凭证",
             sub = "彻底移除本机保存的所有成员 Token 与课表记录",
@@ -1032,11 +1040,48 @@ class MainActivity : AppCompatActivity() {
             title = "教学楼 GPS 坐标预设",
             subtitle = "提交签到时自动叠加 ±8m 随机偏移防雷同",
             badgeColor = 0xFF0A84FF.toInt(),
-            badgeGlyph = "📡"
+            glyphType = SheetGlyphType.PIN
         )
         val body = sheet.getBody()
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
         val hintColor = if (isLight) 0xFF94A3B8.toInt() else 0x66FFFFFF
+
+        val savedPresets = metaStore.getGpsPresets()
+        if (savedPresets.isNotEmpty()) {
+            val presetScroll = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+            }
+            val presetRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            savedPresets.forEach { preset ->
+                val isSelected = (old?.label == preset.label)
+                val chip = TextView(this).apply {
+                    text = if (isSelected) "✓ ${preset.label}" else preset.label
+                    textSize = 12f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(if (isSelected) Color.WHITE else textPrimary)
+                    background = if (isSelected) makePrimaryButtonBg() else makeBevelGlassSurface(13f, 0x24, 0x10, 0x42)
+                    setPadding(12.dp, 7.dp, 12.dp, 7.dp)
+                    setOnClickListener {
+                        metaStore.saveGpsPreset(preset.label, preset.lat, preset.lng)
+                        sheet.dismiss {
+                            GlassIslandBanner.show(this@MainActivity, "已切换教学楼：${preset.label}", GlassIslandBanner.Tone.SUCCESS, isLight)
+                        }
+                    }
+                    setOnLongClickListener {
+                        metaStore.removeGpsPreset(preset.label)
+                        sheet.dismiss {
+                            GlassIslandBanner.show(this@MainActivity, "已删除地点：${preset.label}", GlassIslandBanner.Tone.INFO, isLight)
+                        }
+                        true
+                    }
+                }
+                presetRow.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 8.dp })
+            }
+            presetScroll.addView(presetRow)
+            body.addView(presetScroll, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12.dp })
+        }
 
         val nameInput = EditText(this).apply {
             hint = "地点备注（如：教学楼A栋302）"
@@ -1191,7 +1236,7 @@ class MainActivity : AppCompatActivity() {
             title = "粘贴链接全员代签",
             subtitle = "支持课堂派考勤二维码解析后的直链",
             badgeColor = 0xFF30D158.toInt(),
-            badgeGlyph = "🔗"
+            glyphType = SheetGlyphType.LINK
         )
         val body = sheet.getBody()
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
@@ -1245,7 +1290,7 @@ class MainActivity : AppCompatActivity() {
             title = title,
             subtitle = summary,
             badgeColor = if (hasFailed) 0xFFFF9F0A.toInt() else 0xFF30D158.toInt(),
-            badgeGlyph = if (hasFailed) "!" else "✓"
+            glyphType = if (hasFailed) SheetGlyphType.ALERT else SheetGlyphType.CHECK
         )
         val body = sheet.getBody()
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
@@ -1298,7 +1343,7 @@ class MainActivity : AppCompatActivity() {
             title = "考勤战报记录",
             subtitle = if (records.isEmpty()) "暂无签到记录" else "最近 ${records.size} 次并发代签明细",
             badgeColor = 0xFF0A84FF.toInt(),
-            badgeGlyph = "📊"
+            glyphType = SheetGlyphType.CHART
         )
         val body = sheet.getBody()
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
@@ -1385,7 +1430,7 @@ class MainActivity : AppCompatActivity() {
             isLight = isLight,
             title = title,
             badgeColor = if (danger) 0xFFFF453A.toInt() else 0xFF0A84FF.toInt(),
-            badgeGlyph = if (danger) "!" else "?"
+            glyphType = SheetGlyphType.ALERT
         )
         val body = sheet.getBody()
         val textSecondary = if (isLight) 0xFF475569.toInt() else 0xB3EBEBF5.toInt()
@@ -1424,6 +1469,99 @@ class MainActivity : AppCompatActivity() {
         row.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 10.dp })
         row.addView(okBtn, LinearLayout.LayoutParams(0, -2, 1f))
         body.addView(row)
+        sheet.show()
+    }
+
+    private fun showMemberQuickSheet(acc: Account) {
+        val meta = metaStore.getStudentMeta(acc.name)
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = acc.name,
+            subtitle = "已同步 ${meta.courses.size} 门课程 · 快捷单项操作",
+            badgeColor = 0xFF0A84FF.toInt(),
+            badgeText = acc.name.firstOrNull()?.toString() ?: "同"
+        )
+
+        sheet.addRowCard(
+            context = this,
+            glyphType = SheetGlyphType.BOLT,
+            glyphBg = 0xFFFF9F0A.toInt(),
+            title = "仅对 ${acc.name} 单独补签",
+            sub = "自动沿用最近一次扫码或数字口令任务单独重发"
+        ) {
+            sheet.dismiss {
+                val singleCopy = acc.copy(enabled = true)
+                val lastTask = metaStore.getLastTask()
+                if (lastTask != null && lastTask.first == "QR") {
+                    executeUrlCheckIn(lastTask.second, "${acc.name}·单独补签", listOf(singleCopy))
+                } else {
+                    executeNumericCheckIn(lastTask?.second ?: "AUTO", listOf(singleCopy))
+                }
+            }
+        }
+
+        sheet.addRowCard(
+            context = this,
+            glyphType = SheetGlyphType.SPARKLE,
+            glyphBg = 0xFF30D158.toInt(),
+            title = "同步本学期最新课表",
+            sub = "拉取 ${acc.name} 账号下的全部在修课程"
+        ) {
+            sheet.dismiss {
+                lifecycleScope.launch {
+                    GlassIslandBanner.show(this@MainActivity, "正在同步 ${acc.name} 的课表...", GlassIslandBanner.Tone.INFO, isLight, 1500L)
+                    val (sem, courses) = KtpCourseSyncer.syncCourses(acc.token)
+                    if (courses.isNotEmpty()) {
+                        val oldMap = meta.courses.associateBy { it.courseId }
+                        courses.forEach { c ->
+                            oldMap[c.courseId]?.let { old ->
+                                c.enabled = old.enabled
+                                c.lastActiveTs = old.lastActiveTs
+                            }
+                        }
+                        metaStore.saveStudentMeta(acc.name, StudentCourseMeta(sem, courses))
+                        renderAccountList(animateEntrance = false)
+                        GlassIslandBanner.show(this@MainActivity, "${acc.name} 已同步 ${courses.size} 门课程", GlassIslandBanner.Tone.SUCCESS, isLight)
+                    } else {
+                        GlassIslandBanner.show(this@MainActivity, "未拉取到新课程，请更新凭证", GlassIslandBanner.Tone.WARN, isLight)
+                    }
+                }
+            }
+        }
+
+        sheet.addRowCard(
+            context = this,
+            glyphType = SheetGlyphType.KEYPAD,
+            glyphBg = 0xFF5E5CE6.toInt(),
+            title = "更新登录凭证",
+            sub = "凭证过期或掉线时重新登录刷新 Token"
+        ) {
+            sheet.dismiss {
+                launchSmoothActivity(Intent(this@MainActivity, WebLoginActivity::class.java).apply {
+                    putExtra("preset_name", acc.name)
+                })
+            }
+        }
+
+        sheet.addRowCard(
+            context = this,
+            glyphType = SheetGlyphType.ALERT,
+            glyphBg = 0xFFFF453A.toInt(),
+            title = "从账号池移除此成员",
+            sub = "删除本地保存的凭证与课程勾选记录",
+            danger = true
+        ) {
+            sheet.dismiss {
+                val latest = store.getAccounts().toMutableList()
+                latest.removeAll { it.token == acc.token }
+                store.saveAccounts(latest)
+                metaStore.removeStudentMeta(acc.name)
+                renderAccountList(animateEntrance = false)
+                GlassIslandBanner.show(this@MainActivity, "已移除 ${acc.name}", GlassIslandBanner.Tone.INFO, isLight)
+            }
+        }
+
         sheet.show()
     }
 
@@ -1681,14 +1819,28 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, 2.dp, 0, 0)
             })
 
+            val morePill = FrameLayout(this).apply {
+                background = makeBevelGlassSurface(14f, 0x22, 0x10, 0x38)
+                attachSpringTouch(this, 0.90f) { v ->
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    showMemberQuickSheet(acc)
+                }
+            }
+            morePill.addView(
+                View(this).apply { background = makeMoreDotsDrawable(textSecondary) },
+                FrameLayout.LayoutParams(16.dp, 6.dp, Gravity.CENTER)
+            )
+
             val iosSwitch = IosToggleSwitch(this, acc.enabled, isLight) { checked ->
-                accounts[index].enabled = checked
-                store.saveAccounts(accounts)
+                val latest = store.getAccounts().toMutableList()
+                latest.firstOrNull { it.token == acc.token }?.enabled = checked
+                store.saveAccounts(latest)
                 renderAccountList(animateEntrance = false)
             }
 
             topRow.addView(avatar, LinearLayout.LayoutParams(40.dp, 40.dp))
             topRow.addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
+            topRow.addView(morePill, LinearLayout.LayoutParams(30.dp, 28.dp).apply { rightMargin = 8.dp })
             topRow.addView(iosSwitch, LinearLayout.LayoutParams(48.dp, 28.dp))
             card.addView(topRow)
 
@@ -1789,7 +1941,6 @@ class MainActivity : AppCompatActivity() {
                                 metaStore.saveStudentMeta(acc.name, meta)
                                 renderAccountList(animateEntrance = false)
                             }
-                            // 长按触发“单课专注模式”（仅保留此课，再次长按恢复全选）
                             setOnLongClickListener { v ->
                                 v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                                 val isAlreadySolo = course.enabled && meta.courses.count { it.enabled } == 1
@@ -1883,8 +2034,9 @@ class MainActivity : AppCompatActivity() {
                         confirmText = "确认移除",
                         danger = true
                     ) {
-                        accounts.removeAt(index)
-                        store.saveAccounts(accounts)
+                        val latest = store.getAccounts().toMutableList()
+                        latest.removeAll { it.token == acc.token }
+                        store.saveAccounts(latest)
                         metaStore.removeStudentMeta(acc.name)
                         renderAccountList(animateEntrance = false)
                     }
@@ -1966,6 +2118,61 @@ class MainActivity : AppCompatActivity() {
                 failedAccounts = emptyList()
             ) {}
         }
+    }
+
+    private fun makeMoreDotsDrawable(tint: Int): Drawable = object : Drawable() {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = tint
+            style = Paint.Style.FILL
+        }
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            val r = h * 0.34f
+            val cy = h * 0.5f
+            canvas.drawCircle(w * 0.20f, cy, r, p)
+            canvas.drawCircle(w * 0.50f, cy, r, p)
+            canvas.drawCircle(w * 0.80f, cy, r, p)
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
+    private fun makeBackspaceDrawable(tint: Int): Drawable = object : Drawable() {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = tint
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = 1.8f.dpF
+        }
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            val padY = h * 0.10f
+            val body = Path().apply {
+                moveTo(w * 0.30f, padY)
+                lineTo(w * 0.90f, padY)
+                lineTo(w * 0.90f, h - padY)
+                lineTo(w * 0.30f, h - padY)
+                lineTo(w * 0.08f, h * 0.50f)
+                close()
+            }
+            canvas.drawPath(body, p)
+            val cx = w * 0.58f
+            val cy = h * 0.50f
+            val d = h * 0.18f
+            canvas.drawLine(cx - d, cy - d, cx + d, cy + d, p)
+            canvas.drawLine(cx + d, cy - d, cx - d, cy + d, p)
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private fun makeThemeToggleDrawable(tint: Int): Drawable = object : Drawable() {
