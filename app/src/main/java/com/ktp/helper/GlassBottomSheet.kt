@@ -22,7 +22,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 class GlassBottomSheet(
-    context: Context,
+    private val context: Context,
     private val isLight: Boolean,
     title: String,
     subtitle: String? = null,

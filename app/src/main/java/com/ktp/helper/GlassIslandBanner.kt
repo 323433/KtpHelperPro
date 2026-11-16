@@ -1,7 +1,8 @@
 package com.ktp.helper
 
 import android.app.Activity
-import android.graphics.*
+import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
@@ -42,17 +43,17 @@ object GlassIslandBanner {
         decor.findViewWithTag<LinearLayout>(tag)?.let { decor.removeView(it) }
 
         val d = activity.resources.displayMetrics.density
-        fun Int.dp(): Int = (this * d).toInt()
+        fun dp(v: Int): Int = (v * d).toInt()
 
         val resId = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
-        val statusH = if (resId > 0) activity.resources.getDimensionPixelSize(resId) else 28.dp()
+        val statusH = if (resId > 0) activity.resources.getDimensionPixelSize(resId) else dp(28)
 
         val pill = LinearLayout(activity).apply {
             this.tag = tag
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             elevation = 16f * d
-            setPadding(14.dp(), 10.dp(), 16.dp(), 10.dp)
+            setPadding(dp(14), dp(10), dp(16), dp(10))
 
             val r = 22f * d
             val fill = GradientDrawable(
@@ -67,7 +68,7 @@ object GlassIslandBanner {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = r
                 setColor(Color.TRANSPARENT)
-                setStroke(1.dp(), if (isLight) 0x330F172A else 0x55FFFFFF)
+                setStroke(dp(1), if (isLight) 0x330F172A else 0x55FFFFFF)
             }
             background = LayerDrawable(arrayOf<Drawable>(fill, rim))
         }
@@ -85,8 +86,8 @@ object GlassIslandBanner {
                 setColor(tone.dotColor)
             }
         }
-        dotWrap.addView(halo, FrameLayout.LayoutParams(16.dp(), 16.dp(), Gravity.CENTER))
-        dotWrap.addView(coreDot, FrameLayout.LayoutParams(8.dp(), 8.dp(), Gravity.CENTER))
+        dotWrap.addView(halo, FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER))
+        dotWrap.addView(coreDot, FrameLayout.LayoutParams(dp(8), dp(8), Gravity.CENTER))
 
         val label = TextView(activity).apply {
             text = message
@@ -95,16 +96,16 @@ object GlassIslandBanner {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(if (isLight) 0xFF0F172A.toInt() else Color.WHITE)
-            setPadding(9.dp(), 0, 0, 0)
+            setPadding(dp(9), 0, 0, 0)
         }
 
-        pill.addView(dotWrap, LinearLayout.LayoutParams(16.dp(), 16.dp()))
+        pill.addView(dotWrap, LinearLayout.LayoutParams(dp(16), dp(16)))
         pill.addView(label, LinearLayout.LayoutParams(-2, -2))
 
         val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = statusH + 8.dp()
-            leftMargin = 20.dp()
-            rightMargin = 20.dp()
+            topMargin = statusH + dp(8)
+            leftMargin = dp(20)
+            rightMargin = dp(20)
         }
         decor.addView(pill, lp)
 
