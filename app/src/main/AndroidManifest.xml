@@ -58,9 +58,7 @@
             </intent-filter>
         </service>
 
-        <receiver
-            android:name=".DirectReplyReceiver"
-            android:exported="false" />
+        
             <service
             android:name=".KtpQuickTileService"
             android:exported="true"
