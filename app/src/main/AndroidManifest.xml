@@ -64,5 +64,15 @@
         <receiver
             android:name=".DirectReplyReceiver"
             android:exported="false" />
+            <service
+            android:name=".KtpQuickTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_camera"
+            android:label="课堂派扫码"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

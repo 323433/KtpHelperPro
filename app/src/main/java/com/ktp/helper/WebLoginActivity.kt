@@ -4,8 +4,8 @@ import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ClipDrawable
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.LayerDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -20,12 +20,15 @@ import android.webkit.WebViewClient
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 class WebLoginActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private val handler = Handler(Looper.getMainLooper())
     private var captured = false
+    private var presetName: String? = null
 
     private val Int.dp: Int
         get() = (this * resources.displayMetrics.density).toInt()
@@ -34,6 +37,7 @@ class WebLoginActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = 0xFF0B1120.toInt()
+        presetName = intent.getStringExtra("preset_name")
 
         CookieManager.getInstance().removeAllCookies(null)
         WebStorage.getInstance().deleteAllData()
@@ -57,7 +61,7 @@ class WebLoginActivity : AppCompatActivity() {
             setOnClickListener { finish() }
         }
         val barTitle = TextView(this).apply {
-            text = "录入同学凭证"
+            text = if (presetName != null) "更新「$presetName」凭证" else "添加账号并同步课表"
             textSize = 16f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
@@ -76,7 +80,7 @@ class WebLoginActivity : AppCompatActivity() {
         }
 
         val tipBar = TextView(this).apply {
-            text = "已开启独立隔离环境 · 登录课堂派后自动保存 Token"
+            text = "已开启独立隔离环境 · 登录成功后自动提取凭证并拉取本学期课表"
             textSize = 12f
             gravity = Gravity.CENTER
             setPadding(16.dp, 9.dp, 16.dp, 9.dp)
@@ -116,7 +120,12 @@ class WebLoginActivity : AppCompatActivity() {
                     val token = result?.trim('"') ?: ""
                     if (token.length > 20 && token != "null") {
                         captured = true
-                        promptStudentName(token)
+                        val fixedName = presetName
+                        if (!fixedName.isNullOrEmpty()) {
+                            saveAndSyncCourses(fixedName, token)
+                        } else {
+                            promptStudentName(token)
+                        }
                     } else {
                         handler.postDelayed(this, 1500)
                     }
@@ -132,16 +141,37 @@ class WebLoginActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle("提取凭证成功")
-            .setMessage("已自动捕获 Token，请输入备注姓名保存：")
+            .setMessage("请输入备注姓名（保存时将自动同步该同学本学期课表）：")
             .setView(box)
             .setCancelable(false)
-            .setPositiveButton("保存") { _, _ ->
+            .setPositiveButton("保存并同步") { _, _ ->
                 val name = input.text.toString().trim().ifEmpty { "同学_${System.currentTimeMillis() % 1000}" }
-                AccountStore(this).addOrUpdateAccount(name, token)
-                Toast.makeText(this, "已加密保存：$name", Toast.LENGTH_SHORT).show()
-                finish()
+                saveAndSyncCourses(name, token)
             }
             .show()
+    }
+
+    private fun saveAndSyncCourses(name: String, token: String) {
+        AccountStore(this).addOrUpdateAccount(name, token)
+        lifecycleScope.launch {
+            val metaStore = ProMetaStore(this@WebLoginActivity)
+            val oldMeta = metaStore.getStudentMeta(name)
+            val (sem, courses) = KtpCourseSyncer.syncCourses(token)
+            if (courses.isNotEmpty()) {
+                val oldMap = oldMeta.courses.associateBy { it.courseId }
+                courses.forEach { c ->
+                    oldMap[c.courseId]?.let { old ->
+                        c.enabled = old.enabled
+                        c.lastActiveTs = old.lastActiveTs
+                    }
+                }
+                metaStore.saveStudentMeta(name, StudentCourseMeta(sem, courses))
+                Toast.makeText(this@WebLoginActivity, "$name 已保存并同步 ${courses.size} 门课程", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@WebLoginActivity, "已加密保存：$name", Toast.LENGTH_SHORT).show()
+            }
+            finish()
+        }
     }
 
     override fun onDestroy() {
