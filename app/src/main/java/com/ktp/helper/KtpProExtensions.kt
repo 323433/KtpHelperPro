@@ -31,6 +31,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
+typealias Account = StudentAccount
+
 data class CourseItem(
     val courseId: String,
     val courseName: String,
