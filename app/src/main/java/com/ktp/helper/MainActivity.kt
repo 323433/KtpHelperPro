@@ -123,7 +123,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestRuntimePermissions()
-        startForegroundServiceCompat()
+        // removed foreground service
 
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
         val textSecondary = if (isLight) 0xFF475569.toInt() else 0x99EBEBF5.toInt()
@@ -1132,7 +1132,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startForegroundServiceCompat() {
+    private fun // removed foreground service {
         val intent = Intent(this, CheckInForegroundService::class.java)
         ContextCompat.startForegroundService(this, intent)
     }

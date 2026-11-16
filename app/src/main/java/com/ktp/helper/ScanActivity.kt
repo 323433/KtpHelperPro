@@ -345,12 +345,16 @@ class ScanActivity : AppCompatActivity() {
             val tag = if (autoRescanCount > 0) "捕获新码 · 正在为剩余 ${targetAccounts.size} 人补签..." else "捕获成功 · 正在并发提交 (${targetAccounts.size}人)..."
             statusText.text = tag
             delay(Random.nextLong(140L, 420L))
+            
+            # 修复前：lambda 中直接隐式使用了 it 导致 Unresolved reference
+            # 修复后：显式指定参数名 (done, total)
             val (okCount, failed) = KtpApiClient.batchCheckIn(
                 accounts = targetAccounts,
                 qrRawUrl = qrContent
             ) { done, total ->
                 runOnUiThread { statusText.text = "正在并发提交 ($done/$total)..." }
             }
+            
             val cost = System.currentTimeMillis() - startMs
 
             val hasExpiredFailure = failed.any { it.contains("过期") || it.contains("失效") || it.contains("刷新") }
