@@ -1,27 +1,37 @@
 package com.ktp.helper
 
+import android.Manifest
+import android.animation.LayoutTransition
+import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
+import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.*
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
-import android.text.InputFilter
 import android.text.InputType
+import android.text.TextUtils
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.widget.*
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -36,6 +46,22 @@ class MainActivity : AppCompatActivity() {
     private var detectedClipboardUrl: String = ""
     private val expandedStates = mutableMapOf<String, Boolean>()
     private var isLight = false
+    private var pendingGpsInputs: Pair<EditText, EditText>? = null
+    private var auroraAnimator: ValueAnimator? = null
+    private var sheenAnimator: ValueAnimator? = null
+    private var hasAnimatedEntrance = false
+
+    private val locationPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            pendingGpsInputs?.let { (latEt, lngEt) -> fillCurrentLocation(latEt, lngEt) }
+        } else {
+            GlassIslandBanner.show(this, "未授予位置权限，可手动输入经纬度", GlassIslandBanner.Tone.WARN, isLight)
+        }
+    }
 
     private val Int.dp: Int
         get() = (this * resources.displayMetrics.density).toInt()
@@ -48,48 +74,99 @@ class MainActivity : AppCompatActivity() {
         return if (resId > 0) resources.getDimensionPixelSize(resId) else 28.dp
     }
 
-    private fun makeGlassSurface(
+    // 3D 顶光立体玻璃表面（顶部亮白高光，底部渐隐描边）
+    private fun makeBevelGlassSurface(
         radiusDp: Float,
-        darkTopAlpha: Int = 0x26,
+        darkTopAlpha: Int = 0x28,
         darkBottomAlpha: Int = 0x10,
-        darkBorderAlpha: Int = 0x45
+        topRimAlpha: Int = 0x58
     ): LayerDrawable {
         val r = radiusDp.dpF
-        val topColor = if (isLight) 0xD9FFFFFF.toInt() else ((darkTopAlpha shl 24) or 0x00FFFFFF)
-        val bottomColor = if (isLight) 0xA6FFFFFF.toInt() else ((darkBottomAlpha shl 24) or 0x00FFFFFF)
-        val borderColor = if (isLight) 0xFFFFFFFF.toInt() else ((darkBorderAlpha shl 24) or 0x00FFFFFF)
+        val topColor = if (isLight) 0xE6FFFFFF.toInt() else ((darkTopAlpha shl 24) or 0x00FFFFFF)
+        val bottomColor = if (isLight) 0xB3FFFFFF.toInt() else ((darkBottomAlpha shl 24) or 0x00FFFFFF)
+        val rimStart = if (isLight) 0xFFFFFFFF.toInt() else ((topRimAlpha shl 24) or 0x00FFFFFF)
+        val rimEnd = if (isLight) 0x1F0F172A else 0x12FFFFFF
 
         val fill = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(topColor, bottomColor)).apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = r
         }
+        val bevelRim = object : Drawable() {
+            private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 1f.dpF
+            }
+            override fun draw(canvas: Canvas) {
+                val w = bounds.width().toFloat()
+                val h = bounds.height().toFloat()
+                if (w <= 0f || h <= 0f) return
+                p.shader = LinearGradient(0f, 0f, 0f, h, rimStart, rimEnd, Shader.TileMode.CLAMP)
+                canvas.drawRoundRect(RectF(0.5f.dpF, 0.5f.dpF, w - 0.5f.dpF, h - 0.5f.dpF), r, r, p)
+            }
+            override fun setAlpha(alpha: Int) {}
+            override fun setColorFilter(colorFilter: ColorFilter?) {}
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+        return LayerDrawable(arrayOf<Drawable>(fill, bevelRim))
+    }
+
+    private fun makeGlassInputBg(): LayerDrawable {
+        val r = 14f.dpF
+        val fill = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = r
+            setColor(if (isLight) 0xF2FFFFFF.toInt() else 0x22FFFFFF)
+        }
         val stroke = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = r
             setColor(Color.TRANSPARENT)
-            setStroke(1.dp, borderColor)
+            setStroke(1.dp, if (isLight) 0x250F172A else 0x3DFFFFFF)
         }
         return LayerDrawable(arrayOf<Drawable>(fill, stroke))
     }
 
-    private fun attachSpringTouch(view: View, onClick: () -> Unit) {
+    private fun makePrimaryButtonBg(startColor: Int = 0xFF0A84FF.toInt(), endColor: Int = 0xFF0055D4.toInt()): LayerDrawable {
+        val r = 16f.dpF
+        val fill = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(startColor, endColor)).apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = r
+        }
+        val rim = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = r
+            setColor(Color.TRANSPARENT)
+            setStroke(1.dp, 0x66FFFFFF)
+        }
+        return LayerDrawable(arrayOf<Drawable>(fill, rim))
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachSpringTouch(view: View, scaleDown: Float = 0.965f, onClick: () -> Unit) {
         view.setOnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    v.animate().scaleX(0.965f).scaleY(0.965f).setDuration(110)
+                    v.animate().scaleX(scaleDown).scaleY(scaleDown).setDuration(105)
                         .setInterpolator(DecelerateInterpolator()).start()
                 }
                 MotionEvent.ACTION_UP -> {
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(160)
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(165)
                         .setInterpolator(DecelerateInterpolator()).start()
                     onClick()
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(160).start()
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(165).start()
                 }
             }
             true
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun launchSmoothActivity(intent: Intent) {
+        startActivity(intent)
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,11 +197,49 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(if (isLight) 0xFFEEF2F9.toInt() else 0xFF070B14.toInt())
         }
 
+        // 动态呼吸极光背景层
+        var auroraPhase = 0f
         val backdrop = View(this).apply {
-            background = makeBackdropDrawable()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                setRenderEffect(RenderEffect.createBlurEffect(85f, 85f, Shader.TileMode.CLAMP))
+            background = object : Drawable() {
+                private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                override fun draw(canvas: Canvas) {
+                    val w = bounds.width().toFloat()
+                    val h = bounds.height().toFloat()
+                    if (w <= 0f || h <= 0f) return
+                    val shiftX = (auroraPhase - 0.5f) * w * 0.14f
+                    val shiftY = (auroraPhase - 0.5f) * h * 0.08f
+
+                    val c1 = if (isLight) intArrayOf(0x4A38BDF8, 0x1438BDF8, Color.TRANSPARENT) else intArrayOf(0x6E0A84FF, 0x1E0A84FF, Color.TRANSPARENT)
+                    paint.shader = RadialGradient(w * 0.85f - shiftX, h * 0.14f + shiftY, w * 0.74f, c1, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                    canvas.drawCircle(w * 0.85f - shiftX, h * 0.14f + shiftY, w * 0.74f, paint)
+
+                    val c2 = if (isLight) intArrayOf(0x3E818CF8, 0x12818CF8, Color.TRANSPARENT) else intArrayOf(0x5C5E5CE6, 0x185E5CE6, Color.TRANSPARENT)
+                    paint.shader = RadialGradient(w * 0.12f + shiftX, h * 0.38f - shiftY, w * 0.66f, c2, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                    canvas.drawCircle(w * 0.12f + shiftX, h * 0.38f - shiftY, w * 0.66f, paint)
+
+                    val c3 = if (isLight) intArrayOf(0x3C2DD4BF, 0x102DD4BF, Color.TRANSPARENT) else intArrayOf(0x4800C7BE, 0x1200C7BE, Color.TRANSPARENT)
+                    paint.shader = RadialGradient(w * 0.78f + shiftX * 0.6f, h * 0.76f - shiftY, w * 0.70f, c3, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                    canvas.drawCircle(w * 0.78f + shiftX * 0.6f, h * 0.76f - shiftY, w * 0.70f, paint)
+                }
+                override fun setAlpha(alpha: Int) {}
+                override fun setColorFilter(colorFilter: ColorFilter?) {}
+                @Deprecated("Deprecated in Java")
+                override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                setRenderEffect(RenderEffect.createBlurEffect(88f, 88f, Shader.TileMode.CLAMP))
+            }
+        }
+        auroraAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 8500L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { anim ->
+                auroraPhase = anim.animatedValue as Float
+                backdrop.background?.invalidateSelf()
+            }
+            start()
         }
         rootFrame.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
 
@@ -135,9 +250,10 @@ class MainActivity : AppCompatActivity() {
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20.dp, getStatusBarHeight() + 14.dp, 20.dp, 40.dp)
+            setPadding(20.dp, getStatusBarHeight() + 14.dp, 20.dp, 42.dp)
         }
 
+        // 1. 顶部品牌栏
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -146,7 +262,7 @@ class MainActivity : AppCompatActivity() {
         titleCol.addView(TextView(this).apply {
             text = "KETANGPAI · GLASS PRO"
             textSize = 10.5f
-            letterSpacing = 0.08f
+            letterSpacing = 0.09f
             setTypeface(null, Typeface.BOLD)
             setTextColor(if (isLight) 0xFF0284C7.toInt() else 0xFF64D2FF.toInt())
         })
@@ -159,8 +275,11 @@ class MainActivity : AppCompatActivity() {
         })
 
         val syncAllBtn = FrameLayout(this).apply {
-            background = makeGlassSurface(18f, 0x26, 0x12, 0x45)
-            attachSpringTouch(this) { syncAllAccountsCourses() }
+            background = makeBevelGlassSurface(18f, 0x28, 0x12, 0x52)
+            attachSpringTouch(this, 0.90f) {
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                syncAllAccountsCourses()
+            }
         }
         syncAllBtn.addView(
             View(this).apply { background = makeSfIconDrawable(SfIconType.SYNC, textPrimary) },
@@ -168,10 +287,13 @@ class MainActivity : AppCompatActivity() {
         )
 
         val themeBtn = FrameLayout(this).apply {
-            background = makeGlassSurface(18f, 0x26, 0x12, 0x45)
-            attachSpringTouch(this) {
+            background = makeBevelGlassSurface(18f, 0x28, 0x12, 0x52)
+            attachSpringTouch(this, 0.90f) {
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 metaStore.setLightTheme(!isLight)
                 recreate()
+                @Suppress("DEPRECATION")
+                overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
             }
         }
         themeBtn.addView(
@@ -182,7 +304,7 @@ class MainActivity : AppCompatActivity() {
         val statusPill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = makeGlassSurface(18f, 0x26, 0x12, 0x45)
+            background = makeBevelGlassSurface(18f, 0x28, 0x12, 0x52)
             setPadding(10.dp, 7.dp, 12.dp, 7.dp)
         }
         statusPill.addView(View(this).apply {
@@ -205,10 +327,11 @@ class MainActivity : AppCompatActivity() {
         headerRow.addView(statusPill)
         content.addView(headerRow)
 
+        // 2. 剪贴板动态链接嗅探条
         clipboardBanner = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = makeGlassSurface(18f, 0x35, 0x1A, 0x60)
+            background = makeBevelGlassSurface(18f, 0x38, 0x1A, 0x66)
             setPadding(14.dp, 11.dp, 12.dp, 11.dp)
             visibility = View.GONE
         }
@@ -223,22 +346,19 @@ class MainActivity : AppCompatActivity() {
             text = ""
             textSize = 11f
             maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(textSecondary)
         }
         clipTextCol.addView(clipboardUrlPreview)
 
         val clipGoBtn = TextView(this).apply {
-            text = "立即全员代签"
+            text = "立即代签"
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 14f.dpF
-                setColor(0xFF0A84FF.toInt())
-            }
-            setPadding(12.dp, 7.dp, 12.dp, 7.dp)
-            setOnClickListener {
+            background = makePrimaryButtonBg()
+            setPadding(13.dp, 7.dp, 13.dp, 7.dp)
+            attachSpringTouch(this) {
                 if (detectedClipboardUrl.isNotEmpty()) {
                     executeUrlCheckIn(detectedClipboardUrl, "剪贴板链接")
                 }
@@ -248,9 +368,10 @@ class MainActivity : AppCompatActivity() {
         clipboardBanner.addView(clipGoBtn)
         content.addView(clipboardBanner, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
+        // 3. 双指标统计毛玻璃看板
         val statsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = makeGlassSurface(22f, 0x24, 0x10, 0x42)
+            background = makeBevelGlassSurface(22f, 0x26, 0x10, 0x52)
             setPadding(18.dp, 16.dp, 18.dp, 14.dp)
         }
         val statsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -290,43 +411,79 @@ class MainActivity : AppCompatActivity() {
         statsCard.addView(statsRow)
 
         statsCard.addView(TextView(this).apply {
-            text = "🔒 零后台零耗电 · HTTP/2 并发池 · 支持相册识码续扫与单课过滤"
+            text = "🔒 零后台零耗电 · HTTP/2 并发池 · 相册识码与单课过滤"
             textSize = 11f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(textSecondary)
             setPadding(0, 6.dp, 0, 0)
         })
         content.addView(statsCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
+        // 4. 主视觉「极速扫动态二维码」蓝玻璃卡片（带定时高光扫过动画）
+        var sheenProgress = -0.5f
         val heroCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            val r = 24f.dpF
             val blueGlass = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xD90A84FF.toInt(), 0xAA0055D4.toInt())
+                intArrayOf(0xE00A84FF.toInt(), 0xB80055D4.toInt())
             ).apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = 24f.dpF
+                cornerRadius = r
+            }
+            val sheenLayer = object : Drawable() {
+                private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+                override fun draw(canvas: Canvas) {
+                    val w = bounds.width().toFloat()
+                    val h = bounds.height().toFloat()
+                    if (w <= 0f || h <= 0f || sheenProgress < 0f || sheenProgress > 1f) return
+                    val cx = w * (-0.3f + sheenProgress * 1.6f)
+                    p.shader = LinearGradient(
+                        cx - w * 0.25f, 0f, cx + w * 0.25f, h,
+                        intArrayOf(Color.TRANSPARENT, 0x26FFFFFF, Color.TRANSPARENT),
+                        floatArrayOf(0f, 0.5f, 1f),
+                        Shader.TileMode.CLAMP
+                    )
+                    canvas.drawRoundRect(RectF(0f, 0f, w, h), r, r, p)
+                }
+                override fun setAlpha(alpha: Int) {}
+                override fun setColorFilter(colorFilter: ColorFilter?) {}
+                @Deprecated("Deprecated in Java")
+                override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
             }
             val rim = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = 24f.dpF
+                cornerRadius = r
                 setColor(Color.TRANSPARENT)
-                setStroke(1.dp, 0x66FFFFFF)
+                setStroke(1.dp, 0x77FFFFFF)
             }
-            background = LayerDrawable(arrayOf<Drawable>(blueGlass, rim))
+            background = LayerDrawable(arrayOf<Drawable>(blueGlass, sheenLayer, rim))
             setPadding(18.dp, 18.dp, 18.dp, 16.dp)
+        }
+        sheenAnimator = ValueAnimator.ofFloat(-1.8f, 1.0f).apply {
+            duration = 4800L
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener { anim ->
+                sheenProgress = anim.animatedValue as Float
+                heroCard.background?.invalidateSelf()
+            }
+            start()
         }
 
         val heroTopRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             attachSpringTouch(this) {
-                startActivity(Intent(this@MainActivity, ScanActivity::class.java))
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                launchSmoothActivity(Intent(this@MainActivity, ScanActivity::class.java))
             }
         }
         val heroIconCircle = FrameLayout(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(0x33FFFFFF)
+                setColor(0x38FFFFFF)
             }
         }
         heroIconCircle.addView(
@@ -345,8 +502,10 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
         })
         heroTextCol.addView(TextView(this).apply {
-            text = "现场扫码 · 相册截图识码 · 刷新自动续扫"
-            textSize = 12f
+            text = "现场扫码 · 相册识码 · 刷新自动续扫"
+            textSize = 11.5f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(0xE6E0F2FE.toInt())
             setPadding(0, 2.dp, 0, 0)
         })
@@ -359,7 +518,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(0x28FFFFFF)
+                setColor(0x2EFFFFFF)
             }
         }
         heroTopRow.addView(heroIconCircle, LinearLayout.LayoutParams(46.dp, 46.dp))
@@ -374,33 +533,36 @@ class MainActivity : AppCompatActivity() {
                 setTypeface(null, Typeface.BOLD)
                 gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.RECTANGLE
-                    cornerRadius = 14f.dpF
-                    setColor(0x2EFFFFFF)
-                }
+                val r = 14f.dpF
+                val fill = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(0x2EFFFFFF) }
+                val stroke = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x38FFFFFF) }
+                background = LayerDrawable(arrayOf<Drawable>(fill, stroke))
                 setPadding(0, 9.dp, 0, 9.dp)
-                setOnClickListener { onClick() }
+                attachSpringTouch(this, 0.94f) {
+                    it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    onClick()
+                }
             }
         }
 
         val heroActionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         heroActionRow.addView(
-            buildHeroPill("🔢 数字口令") { promptNumericCodeDialog() },
+            buildHeroPill("🔢 数字口令") { showNumericKeypadSheet() },
             LinearLayout.LayoutParams(0, -2, 1.15f).apply { rightMargin = 5.dp }
         )
         heroActionRow.addView(
-            buildHeroPill("📋 粘贴链接") { promptPasteLinkDialog() },
+            buildHeroPill("📋 粘贴链接") { showPasteLinkSheet() },
             LinearLayout.LayoutParams(0, -2, 1.15f).apply { leftMargin = 3.dp; rightMargin = 3.dp }
         )
         heroActionRow.addView(
-            buildHeroPill("📊 战报") { showCheckInRecordsDialog() },
+            buildHeroPill("📊 战报") { showBattleReportSheet() },
             LinearLayout.LayoutParams(0, -2, 0.85f).apply { leftMargin = 5.dp }
         )
         heroCard.addView(heroActionRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
         content.addView(heroCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 14.dp })
 
+        // 5. 2x2 功能毛玻璃磁贴
         fun buildGlassTile(
             iconType: SfIconType,
             badgeColor: Int,
@@ -410,9 +572,12 @@ class MainActivity : AppCompatActivity() {
         ): LinearLayout {
             return LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = makeGlassSurface(22f, 0x22, 0x0E, 0x3D)
+                background = makeBevelGlassSurface(22f, 0x24, 0x0E, 0x4A)
                 setPadding(15.dp, 14.dp, 15.dp, 14.dp)
-                attachSpringTouch(this, onClick)
+                attachSpringTouch(this) {
+                    it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    onClick()
+                }
 
                 val badge = FrameLayout(this@MainActivity).apply {
                     background = GradientDrawable().apply {
@@ -436,6 +601,8 @@ class MainActivity : AppCompatActivity() {
                 addView(TextView(this@MainActivity).apply {
                     text = subStr
                     textSize = 11.5f
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
                     setTextColor(textSecondary)
                 })
             }
@@ -444,7 +611,7 @@ class MainActivity : AppCompatActivity() {
         val gridRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         gridRow1.addView(
             buildGlassTile(SfIconType.PLUS, 0xFF30D158.toInt(), "添加账号", "登录并同步课表") {
-                startActivity(Intent(this, WebLoginActivity::class.java))
+                launchSmoothActivity(Intent(this, WebLoginActivity::class.java))
             },
             LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 6.dp }
         )
@@ -458,8 +625,8 @@ class MainActivity : AppCompatActivity() {
 
         val gridRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         gridRow2.addView(
-            buildGlassTile(SfIconType.PIN, 0xFF5E5CE6.toInt(), "地点与流转", "GPS预设与名单导出") {
-                showToolsDialog()
+            buildGlassTile(SfIconType.PIN, 0xFF5E5CE6.toInt(), "地点与流转", "GPS预设与配置同步") {
+                showToolsSheet()
             },
             LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 6.dp }
         )
@@ -471,6 +638,7 @@ class MainActivity : AppCompatActivity() {
         )
         content.addView(gridRow2, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12.dp })
 
+        // 6. 账号池标题栏
         val sectionHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -488,7 +656,7 @@ class MainActivity : AppCompatActivity() {
             fontFeatureSettings = "tnum"
             setTypeface(null, Typeface.BOLD)
             setTextColor(if (isLight) 0xFF0284C7.toInt() else 0xFF64D2FF.toInt())
-            background = makeGlassSurface(14f, 0x22, 0x10, 0x38)
+            background = makeBevelGlassSurface(14f, 0x24, 0x10, 0x45)
             setPadding(10.dp, 4.dp, 10.dp, 4.dp)
         }
         sectionHeader.addView(countBadge)
@@ -499,6 +667,10 @@ class MainActivity : AppCompatActivity() {
 
         listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            layoutTransition = LayoutTransition().apply {
+                setDuration(240L)
+                enableTransitionType(LayoutTransition.CHANGING)
+            }
         }
         content.addView(listContainer)
 
@@ -507,69 +679,670 @@ class MainActivity : AppCompatActivity() {
         setContentView(rootFrame)
 
         if (intent?.getBooleanExtra("open_numeric_dialog", false) == true) {
-            promptNumericCodeDialog()
+            window.decorView.post { showNumericKeypadSheet() }
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra("open_numeric_dialog", false)) {
-            promptNumericCodeDialog()
+            showNumericKeypadSheet()
         }
     }
 
     override fun onResume() {
         super.onResume()
         checkClipboardForKtpUrl()
-        renderAccountList()
+        renderAccountList(animateEntrance = !hasAnimatedEntrance)
+        hasAnimatedEntrance = true
     }
 
-    private fun promptNumericCodeDialog() {
-        val box = FrameLayout(this).apply { setPadding(28.dp, 14.dp, 28.dp, 4.dp) }
-        val input = EditText(this).apply {
-            hint = "输入 4 位数字口令 (可留空)"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            gravity = Gravity.CENTER
-            textSize = 22f
-            letterSpacing = 0.2f
-            setTypeface(null, Typeface.BOLD)
-            filters = arrayOf(InputFilter.LengthFilter(6))
-        }
-        box.addView(input)
+    override fun onDestroy() {
+        auroraAnimator?.cancel()
+        sheenAnimator?.cancel()
+        super.onDestroy()
+    }
 
-        AlertDialog.Builder(this)
-            .setTitle("数字口令全员代签")
-            .setMessage("可直接点「免码自动提取」嗅探接口明文口令，或手动输入 4 位口令提交：")
-            .setView(box)
-            .setPositiveButton("提交输入口令") { _, _ ->
-                val code = input.text.toString().trim()
-                if (code.isNotEmpty()) {
-                    executeNumericCheckIn(code)
+    // ==================== 二级毛玻璃抽屉 1：触感玻璃数字键盘 & 免码抢签 ====================
+    private fun showNumericKeypadSheet() {
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = "数字口令代签",
+            subtitle = "输满 4 位自动并发提交 · 或直接免码嗅探",
+            badgeColor = 0xFF0A84FF.toInt(),
+            badgeGlyph = "🔢"
+        )
+        val body = sheet.getBody()
+        val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
+        val textSecondary = if (isLight) 0xFF475569.toInt() else 0x99EBEBF5.toInt()
+
+        val autoHero = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = makePrimaryButtonBg(0xFF0A84FF.toInt(), 0xFF5E5CE6.toInt())
+            setPadding(16.dp, 13.dp, 16.dp, 13.dp)
+            attachSpringTouch(this) {
+                sheet.dismiss { executeNumericCheckIn("AUTO") }
+            }
+        }
+        val autoCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        autoCol.addView(TextView(this).apply {
+            text = "⚡ 免码自动嗅探抢签"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
+        autoCol.addView(TextView(this).apply {
+            text = "自动检索进行中考勤并尝试提取明文口令"
+            textSize = 11.5f
+            setTextColor(0xE6E0F2FE.toInt())
+            setPadding(0, 2.dp, 0, 0)
+        })
+        autoHero.addView(autoCol, LinearLayout.LayoutParams(0, -2, 1f))
+        autoHero.addView(TextView(this).apply {
+            text = "›"
+            textSize = 20f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
+        body.addView(autoHero, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16.dp })
+
+        var codeBuffer = ""
+        val pinBoxes = Array(4) {
+            TextView(this).apply {
+                text = ""
+                textSize = 24f
+                fontFeatureSettings = "tnum"
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(textPrimary)
+                background = makeGlassInputBg()
+            }
+        }
+
+        fun refreshPinBoxes() {
+            for (i in 0 until 4) {
+                val ch = codeBuffer.getOrNull(i)?.toString() ?: ""
+                pinBoxes[i].text = ch
+                val isFocused = (i == codeBuffer.length)
+                val fill = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 16f.dpF
+                    setColor(if (isLight) 0xF2FFFFFF.toInt() else 0x24FFFFFF)
+                }
+                val stroke = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 16f.dpF
+                    setColor(Color.TRANSPARENT)
+                    setStroke(
+                        if (isFocused) 2.dp else 1.dp,
+                        if (isFocused) 0xFF0A84FF.toInt() else (if (isLight) 0x220F172A else 0x38FFFFFF)
+                    )
+                }
+                pinBoxes[i].background = LayerDrawable(arrayOf<Drawable>(fill, stroke))
+            }
+        }
+
+        val pinRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        for (i in 0 until 4) {
+            pinRow.addView(pinBoxes[i], LinearLayout.LayoutParams(58.dp, 62.dp).apply {
+                if (i < 3) rightMargin = 12.dp
+            })
+        }
+        refreshPinBoxes()
+        body.addView(pinRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16.dp })
+
+        val keys = arrayOf(
+            arrayOf("1", "2", "3"),
+            arrayOf("4", "5", "6"),
+            arrayOf("7", "8", "9"),
+            arrayOf("清空", "0", "⌫")
+        )
+
+        for (r in keys.indices) {
+            val rowLayout = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (c in 0 until 3) {
+                val label = keys[r][c]
+                val isActionKey = (label == "清空" || label == "⌫")
+                val keyBtn = TextView(this).apply {
+                    text = label
+                    textSize = if (isActionKey) 14f else 21f
+                    fontFeatureSettings = "tnum"
+                    setTypeface(null, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    setTextColor(if (isActionKey) textSecondary else textPrimary)
+                    background = makeBevelGlassSurface(16f, 0x28, 0x12, 0x45)
+                }
+                attachSpringTouch(keyBtn, 0.93f) {
+                    keyBtn.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    when (label) {
+                        "清空" -> {
+                            codeBuffer = ""
+                            refreshPinBoxes()
+                        }
+                        "⌫" -> {
+                            if (codeBuffer.isNotEmpty()) {
+                                codeBuffer = codeBuffer.dropLast(1)
+                                refreshPinBoxes()
+                            }
+                        }
+                        else -> {
+                            if (codeBuffer.length < 4) {
+                                codeBuffer += label
+                                refreshPinBoxes()
+                                if (codeBuffer.length == 4) {
+                                    val finalCode = codeBuffer
+                                    keyBtn.postDelayed({
+                                        sheet.dismiss { executeNumericCheckIn(finalCode) }
+                                    }, 140L)
+                                }
+                            }
+                        }
+                    }
+                }
+                rowLayout.addView(keyBtn, LinearLayout.LayoutParams(0, 50.dp, 1f).apply {
+                    if (c < 2) rightMargin = 10.dp
+                })
+            }
+            body.addView(rowLayout, LinearLayout.LayoutParams(-1, -2).apply {
+                if (r < 3) bottomMargin = 10.dp
+            })
+        }
+
+        sheet.show()
+    }
+
+    // ==================== 二级毛玻璃抽屉 2：地点预设与配置流转中心 ====================
+    private fun showToolsSheet() {
+        val currentGps = metaStore.getGpsPreset()
+        val gpsSub = if (currentGps != null) {
+            "${currentGps.label} (${String.format(Locale.US, "%.4f, %.4f", currentGps.lat, currentGps.lng)})"
+        } else {
+            "未设置 · 点击采集当前教室定位或手动输入"
+        }
+
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = "地点预设与配置流转",
+            subtitle = "定位防雷同偏移 · 寝室全组配置一键互通",
+            badgeColor = 0xFF5E5CE6.toInt(),
+            badgeGlyph = "📍"
+        )
+
+        sheet.addRowCard(
+            context = this,
+            glyph = "📡",
+            glyphBg = 0xFF0A84FF.toInt(),
+            title = "教学楼 GPS 坐标预设",
+            sub = gpsSub
+        ) {
+            sheet.dismiss { showGpsPresetSheet() }
+        }
+
+        sheet.addRowCard(
+            context = this,
+            glyph = "📤",
+            glyphBg = 0xFF30D158.toInt(),
+            title = "复制全组配置到剪贴板",
+            sub = "导出当前全员加密凭证，发到寝室群给室友接管"
+        ) {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("ktp_config", store.exportJson()))
+            sheet.dismiss {
+                GlassIslandBanner.show(this, "全组加密配置已复制到剪贴板", GlassIslandBanner.Tone.SUCCESS, isLight)
+            }
+        }
+
+        sheet.addRowCard(
+            context = this,
+            glyph = "📥",
+            glyphBg = 0xFFFF9F0A.toInt(),
+            title = "从剪贴板导入室友配置",
+            sub = "自动识别剪贴板配置串并同步到本地账号池"
+        ) {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val text = cm.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+            sheet.dismiss {
+                if (store.importJson(text)) {
+                    renderAccountList(animateEntrance = true)
+                    GlassIslandBanner.show(this, "配置导入成功，账号池已同步", GlassIslandBanner.Tone.SUCCESS, isLight)
                 } else {
-                    executeNumericCheckIn("AUTO")
+                    GlassIslandBanner.show(this, "剪贴板中没有有效的配置数据", GlassIslandBanner.Tone.WARN, isLight)
                 }
             }
-            .setNeutralButton("⚡ 免码自动提取") { _, _ ->
-                executeNumericCheckIn("AUTO")
+        }
+
+        sheet.addRowCard(
+            context = this,
+            glyph = "🗑️",
+            glyphBg = 0xFFFF453A.toInt(),
+            title = "清空本机所有本地凭证",
+            sub = "彻底移除本机保存的所有成员 Token 与课表记录",
+            danger = true
+        ) {
+            sheet.dismiss {
+                showConfirmSheet(
+                    title = "确认清空所有凭证？",
+                    message = "清空后需要重新登录或从室友处重新导入配置，此操作不可撤销。",
+                    confirmText = "确认清空",
+                    danger = true
+                ) {
+                    store.clearAll()
+                    renderAccountList()
+                    GlassIslandBanner.show(this, "已彻底清除所有本地数据", GlassIslandBanner.Tone.ERROR, isLight)
+                }
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
+
+        sheet.show()
     }
 
+    // ==================== 二级毛玻璃抽屉 3：教学楼 GPS 坐标采集器 ====================
+    private fun showGpsPresetSheet() {
+        val old = metaStore.getGpsPreset()
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = "教学楼 GPS 坐标预设",
+            subtitle = "提交签到时自动叠加 ±8m 随机偏移防雷同",
+            badgeColor = 0xFF0A84FF.toInt(),
+            badgeGlyph = "📡"
+        )
+        val body = sheet.getBody()
+        val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
+        val hintColor = if (isLight) 0xFF94A3B8.toInt() else 0x66FFFFFF
+
+        val nameInput = EditText(this).apply {
+            hint = "地点备注（如：教学楼A栋302）"
+            setText(old?.label ?: "")
+            setTextColor(textPrimary)
+            setHintTextColor(hintColor)
+            textSize = 14.5f
+            background = makeGlassInputBg()
+            setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+        }
+        val latInput = EditText(this).apply {
+            hint = "纬度 Latitude（如：26.058321）"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(old?.lat?.toString() ?: "")
+            setTextColor(textPrimary)
+            setHintTextColor(hintColor)
+            textSize = 14.5f
+            background = makeGlassInputBg()
+            setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+        }
+        val lngInput = EditText(this).apply {
+            hint = "经度 Longitude（如：119.197452）"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(old?.lng?.toString() ?: "")
+            setTextColor(textPrimary)
+            setHintTextColor(hintColor)
+            textSize = 14.5f
+            background = makeGlassInputBg()
+            setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+        }
+
+        val locateBtn = TextView(this).apply {
+            text = "📍 一键读取当前教室 GPS 坐标"
+            textSize = 13.5f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(if (isLight) 0xFF0284C7.toInt() else 0xFF64D2FF.toInt())
+            background = makeBevelGlassSurface(14f, 0x2A, 0x14, 0x55)
+            setPadding(0, 11.dp, 0, 11.dp)
+            attachSpringTouch(this) {
+                pendingGpsInputs = Pair(latInput, lngInput)
+                val fineOk = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                val coarseOk = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                if (fineOk || coarseOk) {
+                    fillCurrentLocation(latInput, lngInput)
+                } else {
+                    locationPermLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                }
+            }
+        }
+
+        body.addView(locateBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12.dp })
+        body.addView(nameInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10.dp })
+        body.addView(latInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10.dp })
+        body.addView(lngInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16.dp })
+
+        val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        if (old != null) {
+            val clearBtn = TextView(this).apply {
+                text = "清除预设"
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(0xFFFF453A.toInt())
+                background = makeBevelGlassSurface(16f, 0x20, 0x10, 0x35)
+                setPadding(0, 13.dp, 0, 13.dp)
+                attachSpringTouch(this) {
+                    metaStore.clearGpsPreset()
+                    sheet.dismiss {
+                        GlassIslandBanner.show(this@MainActivity, "已清除定位预设", GlassIslandBanner.Tone.INFO, isLight)
+                    }
+                }
+            }
+            btnRow.addView(clearBtn, LinearLayout.LayoutParams(0, -2, 0.9f).apply { rightMargin = 10.dp })
+        }
+
+        val saveBtn = TextView(this).apply {
+            text = "保存坐标预设"
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = makePrimaryButtonBg()
+            setPadding(0, 13.dp, 0, 13.dp)
+            attachSpringTouch(this) {
+                val label = nameInput.text.toString().trim().ifEmpty { "常用教室" }
+                val lat = latInput.text.toString().trim().toDoubleOrNull()
+                val lng = lngInput.text.toString().trim().toDoubleOrNull()
+                if (lat != null && lng != null) {
+                    metaStore.saveGpsPreset(label, lat, lng)
+                    sheet.dismiss {
+                        GlassIslandBanner.show(this@MainActivity, "已保存定位：$label", GlassIslandBanner.Tone.SUCCESS, isLight)
+                    }
+                } else {
+                    GlassIslandBanner.show(this@MainActivity, "请输入有效的经纬度数字", GlassIslandBanner.Tone.WARN, isLight)
+                }
+            }
+        }
+        btnRow.addView(saveBtn, LinearLayout.LayoutParams(0, -2, 1.4f))
+        body.addView(btnRow)
+
+        sheet.show()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun fillCurrentLocation(latEt: EditText, lngEt: EditText) {
+        try {
+            val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+            if (loc != null) {
+                latEt.setText(String.format(Locale.US, "%.6f", loc.latitude))
+                lngEt.setText(String.format(Locale.US, "%.6f", loc.longitude))
+                GlassIslandBanner.show(this, "已捕获当前教室经纬度", GlassIslandBanner.Tone.SUCCESS, isLight)
+            } else {
+                GlassIslandBanner.show(this, "暂未获取到定位，请开启系统 GPS 开关", GlassIslandBanner.Tone.WARN, isLight)
+            }
+        } catch (_: Exception) {
+            GlassIslandBanner.show(this, "定位读取失败，请手动填写", GlassIslandBanner.Tone.WARN, isLight)
+        }
+    }
+
+    // ==================== 二级毛玻璃抽屉 4：粘贴链接代签 ====================
+    private fun showPasteLinkSheet() {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipText = cm.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = "粘贴链接全员代签",
+            subtitle = "支持课堂派考勤二维码解析后的直链",
+            badgeColor = 0xFF30D158.toInt(),
+            badgeGlyph = "🔗"
+        )
+        val body = sheet.getBody()
+        val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
+        val hintColor = if (isLight) 0xFF94A3B8.toInt() else 0x66FFFFFF
+
+        val input = EditText(this).apply {
+            hint = "https://www.ketangpai.com/..."
+            setText(if (clipText.contains("http")) clipText else "")
+            setTextColor(textPrimary)
+            setHintTextColor(hintColor)
+            textSize = 13.5f
+            minLines = 2
+            maxLines = 4
+            background = makeGlassInputBg()
+            setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+        }
+        body.addView(input, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 14.dp })
+
+        val submitBtn = TextView(this).apply {
+            text = "🚀 立即全员并发提交"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = makePrimaryButtonBg()
+            setPadding(0, 14.dp, 0, 14.dp)
+            attachSpringTouch(this) {
+                val url = input.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    sheet.dismiss { executeUrlCheckIn(url, "手动粘贴链接") }
+                } else {
+                    GlassIslandBanner.show(this@MainActivity, "请先粘贴签到链接", GlassIslandBanner.Tone.WARN, isLight)
+                }
+            }
+        }
+        body.addView(submitBtn)
+        sheet.show()
+    }
+
+    // ==================== 二级毛玻璃抽屉 5：战报结果 & 历史时间轴 ====================
+    private fun showResultReportSheet(
+        title: String,
+        summary: String,
+        detail: String,
+        failedAccounts: List<Account>,
+        onRetryFailed: () -> Unit
+    ) {
+        val hasFailed = failedAccounts.isNotEmpty()
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = title,
+            subtitle = summary,
+            badgeColor = if (hasFailed) 0xFFFF9F0A.toInt() else 0xFF30D158.toInt(),
+            badgeGlyph = if (hasFailed) "!" else "✓"
+        )
+        val body = sheet.getBody()
+        val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
+
+        val detailCard = TextView(this).apply {
+            text = detail
+            textSize = 13.5f
+            setLineSpacing(4f, 1.15f)
+            setTextColor(textPrimary)
+            background = makeBevelGlassSurface(18f, 0x22, 0x10, 0x40)
+            setPadding(16.dp, 14.dp, 16.dp, 14.dp)
+        }
+        body.addView(detailCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 16.dp })
+
+        if (hasFailed) {
+            val retryBtn = TextView(this).apply {
+                text = "🔄 仅对失败的 ${failedAccounts.size} 人极速补签"
+                textSize = 14.5f
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                background = makePrimaryButtonBg(0xFFFF9F0A.toInt(), 0xFFFF375F.toInt())
+                setPadding(0, 14.dp, 0, 14.dp)
+                attachSpringTouch(this) {
+                    sheet.dismiss { onRetryFailed() }
+                }
+            }
+            body.addView(retryBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10.dp })
+        }
+
+        val okBtn = TextView(this).apply {
+            text = "完成"
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(if (hasFailed) textPrimary else Color.WHITE)
+            background = if (hasFailed) makeBevelGlassSurface(16f, 0x22, 0x10, 0x38) else makePrimaryButtonBg()
+            setPadding(0, 13.dp, 0, 13.dp)
+            attachSpringTouch(this) { sheet.dismiss() }
+        }
+        body.addView(okBtn)
+        sheet.show()
+    }
+
+    private fun showBattleReportSheet() {
+        val records = metaStore.getRecords()
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = "考勤战报记录",
+            subtitle = if (records.isEmpty()) "暂无签到记录" else "最近 ${records.size} 次并发代签明细",
+            badgeColor = 0xFF0A84FF.toInt(),
+            badgeGlyph = "📊"
+        )
+        val body = sheet.getBody()
+        val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
+        val textSecondary = if (isLight) 0xFF475569.toInt() else 0x8CEBEBF5.toInt()
+
+        if (records.isEmpty()) {
+            body.addView(TextView(this).apply {
+                text = "扫码、输入数字口令或粘贴链接代签后，将在此自动生成带耗时与名单的战报。"
+                textSize = 13.5f
+                setTextColor(textSecondary)
+                gravity = Gravity.CENTER
+                setPadding(16.dp, 24.dp, 16.dp, 24.dp)
+            })
+        } else {
+            records.forEach { r ->
+                val itemCard = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = makeBevelGlassSurface(18f, 0x22, 0x0E, 0x3E)
+                    setPadding(14.dp, 12.dp, 14.dp, 12.dp)
+                }
+                val top = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                top.addView(TextView(this).apply {
+                    text = r.mode
+                    textSize = 12f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(if (isLight) 0xFF0284C7.toInt() else 0xFF64D2FF.toInt())
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                top.addView(TextView(this).apply {
+                    text = r.time
+                    textSize = 11f
+                    fontFeatureSettings = "tnum"
+                    setTextColor(textSecondary)
+                })
+                itemCard.addView(top)
+
+                itemCard.addView(TextView(this).apply {
+                    text = r.summary
+                    textSize = 14.5f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                    setPadding(0, 4.dp, 0, 2.dp)
+                })
+                itemCard.addView(TextView(this).apply {
+                    text = r.detail
+                    textSize = 12f
+                    setTextColor(textSecondary)
+                })
+                body.addView(itemCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10.dp })
+            }
+
+            val clearBtn = TextView(this).apply {
+                text = "清空历史战报"
+                textSize = 13.5f
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(0xFFFF453A.toInt())
+                background = makeBevelGlassSurface(16f, 0x1E, 0x0E, 0x35)
+                setPadding(0, 12.dp, 0, 12.dp)
+                attachSpringTouch(this) {
+                    metaStore.clearRecords()
+                    sheet.dismiss {
+                        GlassIslandBanner.show(this@MainActivity, "已清空本地战报", GlassIslandBanner.Tone.INFO, isLight)
+                    }
+                }
+            }
+            body.addView(clearBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 4.dp })
+        }
+
+        sheet.show()
+    }
+
+    private fun showConfirmSheet(
+        title: String,
+        message: String,
+        confirmText: String,
+        danger: Boolean = false,
+        onConfirm: () -> Unit
+    ) {
+        val sheet = GlassBottomSheet(
+            context = this,
+            isLight = isLight,
+            title = title,
+            badgeColor = if (danger) 0xFFFF453A.toInt() else 0xFF0A84FF.toInt(),
+            badgeGlyph = if (danger) "!" else "?"
+        )
+        val body = sheet.getBody()
+        val textSecondary = if (isLight) 0xFF475569.toInt() else 0xB3EBEBF5.toInt()
+
+        body.addView(TextView(this).apply {
+            text = message
+            textSize = 14f
+            setLineSpacing(4f, 1.15f)
+            setTextColor(textSecondary)
+            setPadding(4.dp, 0, 4.dp, 18.dp)
+        })
+
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val cancelBtn = TextView(this).apply {
+            text = "取消"
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(if (isLight) 0xFF0F172A.toInt() else Color.WHITE)
+            background = makeBevelGlassSurface(16f, 0x22, 0x10, 0x38)
+            setPadding(0, 13.dp, 0, 13.dp)
+            attachSpringTouch(this) { sheet.dismiss() }
+        }
+        val okBtn = TextView(this).apply {
+            text = confirmText
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = if (danger) makePrimaryButtonBg(0xFFFF453A.toInt(), 0xFFD70015.toInt()) else makePrimaryButtonBg()
+            setPadding(0, 13.dp, 0, 13.dp)
+            attachSpringTouch(this) {
+                sheet.dismiss { onConfirm() }
+            }
+        }
+        row.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 10.dp })
+        row.addView(okBtn, LinearLayout.LayoutParams(0, -2, 1f))
+        body.addView(row)
+        sheet.show()
+    }
+
+    // ==================== 核心签到执行与账号池双列课程胶囊渲染 ====================
     private fun executeNumericCheckIn(code: String, overrideAccounts: List<Account>? = null) {
         val targetList = overrideAccounts ?: store.getAccounts()
         if (targetList.none { it.enabled }) {
-            Toast.makeText(this, "请先在账号池启用至少一位同学", Toast.LENGTH_SHORT).show()
+            GlassIslandBanner.show(this, "请先在账号池启用至少一位同学", GlassIslandBanner.Tone.WARN, isLight)
             return
         }
 
         if (overrideAccounts == null && !CheckInCooldownGuard.tryAcquire("num_$code")) {
-            Toast.makeText(this, "请求已提交，请勿在 3 秒内重复连点", Toast.LENGTH_SHORT).show()
+            GlassIslandBanner.show(this, "请求已提交，请勿在 3 秒内重复连点", GlassIslandBanner.Tone.WARN, isLight)
             return
         }
 
-        val tip = if (code == "AUTO") "正在自动嗅探接口明文口令并并发提交..." else "正在检索考勤并提交口令 $code ..."
-        Toast.makeText(this, tip, Toast.LENGTH_SHORT).show()
+        val tip = if (code == "AUTO") "正在自动嗅探明文口令并并发提交..." else "正在检索考勤并提交口令 $code ..."
+        GlassIslandBanner.show(this, tip, GlassIslandBanner.Tone.INFO, isLight, 1800L)
+
         lifecycleScope.launch {
             val startMs = System.currentTimeMillis()
             val result = KtpNumericCheckInEngine.batchNumericCheckIn(
@@ -592,17 +1365,59 @@ class MainActivity : AppCompatActivity() {
                 result.failed.any { msg -> msg.startsWith(acc.name) }
             }
 
-            val builder = AlertDialog.Builder(this@MainActivity)
-                .setTitle("数字口令签到战报")
-                .setMessage("$summary\n$detail")
-                .setPositiveButton("确定", null)
-
-            if (failedAccounts.isNotEmpty()) {
-                builder.setNeutralButton("🔄 仅对失败的 ${failedAccounts.size} 人补签") { _, _ ->
-                    executeNumericCheckIn(code, failedAccounts)
-                }
+            showResultReportSheet(
+                title = "数字口令签到战报",
+                summary = summary,
+                detail = detail,
+                failedAccounts = failedAccounts
+            ) {
+                executeNumericCheckIn(code, failedAccounts)
             }
-            builder.show()
+        }
+    }
+
+    private fun executeUrlCheckIn(rawUrl: String, modeLabel: String, overrideAccounts: List<Account>? = null) {
+        if (overrideAccounts == null && !CheckInCooldownGuard.tryAcquire("url_$rawUrl")) {
+            GlassIslandBanner.show(this, "请求已提交，请勿在 3 秒内重复连点", GlassIslandBanner.Tone.WARN, isLight)
+            return
+        }
+
+        val baseAccounts = overrideAccounts ?: store.getAccounts()
+        val (targetAccounts, skippedList) = KtpCourseSyncer.filterAccountsByCourse(this, baseAccounts, rawUrl)
+        if (targetAccounts.isEmpty()) {
+            GlassIslandBanner.show(this, "当前没有符合该课程勾选条件的启用账号", GlassIslandBanner.Tone.WARN, isLight)
+            return
+        }
+
+        GlassIslandBanner.show(this, "正在为 ${targetAccounts.size} 位同学并发提交...", GlassIslandBanner.Tone.INFO, isLight, 1800L)
+        lifecycleScope.launch {
+            val startMs = System.currentTimeMillis()
+            val (okCount, failed) = KtpQrBatchEngine.batchQrCheckIn(
+                context = this@MainActivity,
+                accounts = targetAccounts,
+                qrRawUrl = rawUrl
+            ) { _, _ -> }
+            val cost = System.currentTimeMillis() - startMs
+            val summary = "成功 $okCount 人 · 耗时 ${cost}ms"
+            val detailParts = mutableListOf<String>()
+            if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString(separator = ", ")}")
+            if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString(separator = ", ")}")
+            val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(separator = " | ")
+
+            metaStore.addRecord(modeLabel, summary, detail)
+
+            val failedAccounts = targetAccounts.filter { acc ->
+                failed.any { msg -> msg.startsWith(acc.name) }
+            }
+
+            showResultReportSheet(
+                title = "考勤战报（$modeLabel）",
+                summary = summary,
+                detail = detail,
+                failedAccounts = failedAccounts
+            ) {
+                executeUrlCheckIn(rawUrl, "$modeLabel·补签", failedAccounts)
+            }
         }
     }
 
@@ -634,9 +1449,36 @@ class MainActivity : AppCompatActivity() {
         countBadge.text = "${enabledAccounts.size} / ${accounts.size} 人"
     }
 
-    private fun renderAccountList() {
+    private fun makeCourseChipBg(enabled: Boolean): LayerDrawable {
+        val r = 13f.dpF
+        val fillCol = when {
+            enabled && isLight -> 0x2430D158
+            enabled && !isLight -> 0x2630D158
+            isLight -> 0x120F172A
+            else -> 0x12FFFFFF
+        }
+        val strokeCol = when {
+            enabled -> 0x7730D158
+            isLight -> 0x1A0F172A
+            else -> 0x24FFFFFF
+        }
+        val fill = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = r
+            setColor(fillCol)
+        }
+        val stroke = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = r
+            setColor(Color.TRANSPARENT)
+            setStroke(1.dp, strokeCol)
+        }
+        return LayerDrawable(arrayOf<Drawable>(fill, stroke))
+    }
+
+    private fun renderAccountList(animateEntrance: Boolean = false) {
         listContainer.removeAllViews()
-        val accounts = store.getAccounts()
+        val accounts = store.getAccounts().toMutableList()
         updateDashboardStats(accounts)
 
         val textPrimary = if (isLight) 0xFF0F172A.toInt() else Color.WHITE
@@ -646,7 +1488,7 @@ class MainActivity : AppCompatActivity() {
             val emptyBox = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                background = makeGlassSurface(22f, 0x20, 0x0E, 0x3D)
+                background = makeBevelGlassSurface(22f, 0x22, 0x0E, 0x45)
                 setPadding(24.dp, 32.dp, 24.dp, 32.dp)
             }
             emptyBox.addView(TextView(this).apply {
@@ -680,7 +1522,7 @@ class MainActivity : AppCompatActivity() {
 
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = makeGlassSurface(22f, 0x22, 0x0E, 0x40)
+                background = makeBevelGlassSurface(22f, 0x24, 0x0E, 0x4E)
                 setPadding(16.dp, 14.dp, 16.dp, 14.dp)
             }
 
@@ -688,8 +1530,9 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setOnClickListener {
+                    it.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     expandedStates[acc.name] = !isExpanded
-                    renderAccountList()
+                    renderAccountList(animateEntrance = false)
                 }
             }
 
@@ -739,7 +1582,7 @@ class MainActivity : AppCompatActivity() {
             val iosSwitch = IosToggleSwitch(this, acc.enabled, isLight) { checked ->
                 accounts[index].enabled = checked
                 store.saveAccounts(accounts)
-                renderAccountList()
+                renderAccountList(animateEntrance = false)
             }
 
             topRow.addView(avatar, LinearLayout.LayoutParams(40.dp, 40.dp))
@@ -761,21 +1604,39 @@ class MainActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER_VERTICAL
                 }
                 semHeader.addView(TextView(this).apply {
-                    text = "${meta.semester} · 活跃课程已自动置顶"
+                    text = "${meta.semester} · 高频置顶"
                     textSize = 11.5f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(textSecondary)
                 }, LinearLayout.LayoutParams(0, -2, 1f))
+
+                if (meta.courses.isNotEmpty()) {
+                    val allChecked = meta.courses.all { c -> c.enabled }
+                    val toggleAllBtn = TextView(this).apply {
+                        text = if (allChecked) "全不选" else "全选"
+                        textSize = 11.5f
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(if (isLight) 0xFF059669.toInt() else 0xFF30D158.toInt())
+                        setPadding(8.dp, 4.dp, 10.dp, 4.dp)
+                        setOnClickListener {
+                            val targetState = !allChecked
+                            meta.courses.forEach { c -> c.enabled = targetState }
+                            metaStore.saveStudentMeta(acc.name, meta)
+                            renderAccountList(animateEntrance = false)
+                        }
+                    }
+                    semHeader.addView(toggleAllBtn)
+                }
 
                 val syncOneBtn = TextView(this).apply {
                     text = "🔄 同步课表"
                     textSize = 11.5f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(0xFF0A84FF.toInt())
-                    setPadding(8.dp, 4.dp, 4.dp, 4.dp)
+                    setPadding(6.dp, 4.dp, 4.dp, 4.dp)
                     setOnClickListener {
                         lifecycleScope.launch {
-                            Toast.makeText(this@MainActivity, "正在同步 ${acc.name} 的课表...", Toast.LENGTH_SHORT).show()
+                            GlassIslandBanner.show(this@MainActivity, "正在同步 ${acc.name} 的课表...", GlassIslandBanner.Tone.INFO, isLight, 1500L)
                             val (sem, courses) = KtpCourseSyncer.syncCourses(acc.token)
                             if (courses.isNotEmpty()) {
                                 val oldMap = meta.courses.associateBy { it.courseId }
@@ -786,10 +1647,10 @@ class MainActivity : AppCompatActivity() {
                                     }
                                 }
                                 metaStore.saveStudentMeta(acc.name, StudentCourseMeta(sem, courses))
-                                renderAccountList()
-                                Toast.makeText(this@MainActivity, "${acc.name} 已同步 ${courses.size} 门课程", Toast.LENGTH_SHORT).show()
+                                renderAccountList(animateEntrance = false)
+                                GlassIslandBanner.show(this@MainActivity, "${acc.name} 已同步 ${courses.size} 门课程", GlassIslandBanner.Tone.SUCCESS, isLight)
                             } else {
-                                Toast.makeText(this@MainActivity, "未拉取到新课程，请检查登录状态", Toast.LENGTH_SHORT).show()
+                                GlassIslandBanner.show(this@MainActivity, "未拉取到新课程，请检查登录状态", GlassIslandBanner.Tone.WARN, isLight)
                             }
                         }
                     }
@@ -805,81 +1666,123 @@ class MainActivity : AppCompatActivity() {
                         setPadding(4.dp, 6.dp, 4.dp, 8.dp)
                     })
                 } else {
+                    // 双列毛玻璃课程胶囊网格 (2-Column Glass Chips)
+                    var rowPair: LinearLayout? = null
                     meta.courses.forEachIndexed { cIdx, course ->
-                        val cRow = LinearLayout(this).apply {
+                        if (cIdx % 2 == 0) {
+                            rowPair = LinearLayout(this).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                            }
+                            card.addView(rowPair, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8.dp })
+                        }
+
+                        val chip = LinearLayout(this).apply {
                             orientation = LinearLayout.HORIZONTAL
                             gravity = Gravity.CENTER_VERTICAL
-                            setPadding(4.dp, 7.dp, 4.dp, 7.dp)
-                            setOnClickListener {
+                            background = makeCourseChipBg(course.enabled)
+                            setPadding(10.dp, 9.dp, 10.dp, 9.dp)
+                            attachSpringTouch(this, 0.95f) {
+                                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                 meta.courses[cIdx].enabled = !course.enabled
                                 meta.courses[cIdx].lastActiveTs = System.currentTimeMillis()
                                 metaStore.saveStudentMeta(acc.name, meta)
-                                renderAccountList()
+                                renderAccountList(animateEntrance = false)
                             }
                         }
-                        val checkBox = TextView(this).apply {
-                            text = if (course.enabled) "✓" else ""
-                            textSize = 12f
+
+                        val dotIndicator = TextView(this).apply {
+                            text = if (course.enabled) "✓" else "○"
+                            textSize = 11f
                             setTypeface(null, Typeface.BOLD)
-                            gravity = Gravity.CENTER
-                            setTextColor(Color.WHITE)
-                            background = GradientDrawable().apply {
-                                shape = GradientDrawable.RECTANGLE
-                                cornerRadius = 6f.dpF
-                                setColor(if (course.enabled) 0xFF30D158.toInt() else (if (isLight) 0x220F172A else 0x26FFFFFF))
-                            }
+                            setTextColor(if (course.enabled) (if (isLight) 0xFF059669.toInt() else 0xFF30D158.toInt()) else textSecondary)
                         }
-                        val cName = TextView(this).apply {
+
+                        val chipLabel = TextView(this).apply {
                             text = course.courseName
-                            textSize = 13.5f
+                            textSize = 12.5f
+                            setTypeface(null, if (course.enabled) Typeface.BOLD else Typeface.NORMAL)
+                            maxLines = 1
+                            ellipsize = TextUtils.TruncateAt.END
                             setTextColor(if (course.enabled) textPrimary else textSecondary)
-                            setPadding(10.dp, 0, 0, 0)
+                            setPadding(6.dp, 0, 0, 0)
                         }
-                        cRow.addView(checkBox, LinearLayout.LayoutParams(20.dp, 20.dp))
-                        cRow.addView(cName, LinearLayout.LayoutParams(0, -2, 1f))
-                        card.addView(cRow)
+
+                        chip.addView(dotIndicator)
+                        chip.addView(chipLabel, LinearLayout.LayoutParams(0, -2, 1f))
+
+                        val chipLp = LinearLayout.LayoutParams(0, -2, 1f).apply {
+                            if (cIdx % 2 == 0) rightMargin = 4.dp else leftMargin = 4.dp
+                        }
+                        rowPair?.addView(chip, chipLp)
+
+                        // 若为奇数末尾项，补充占位保持对齐
+                        if (cIdx == meta.courses.lastIndex && cIdx % 2 == 0) {
+                            rowPair?.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { leftMargin = 4.dp })
+                        }
                     }
                 }
 
+                // 卡片底部精致胶囊操作栏
                 val footerActions = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.END
                 }
-                val refreshCredBtn = TextView(this).apply {
-                    text = "更新凭证"
-                    textSize = 12.5f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(0xFF0A84FF.toInt())
-                    setPadding(12.dp, 8.dp, 12.dp, 4.dp)
-                    setOnClickListener {
-                        startActivity(Intent(this@MainActivity, WebLoginActivity::class.java).apply {
-                            putExtra("preset_name", acc.name)
-                        })
+                fun makeActionMiniPill(label: String, tint: Int, onClick: () -> Unit): TextView {
+                    return TextView(this).apply {
+                        text = label
+                        textSize = 11.5f
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(tint)
+                        val r = 11f.dpF
+                        val fill = GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            cornerRadius = r
+                            setColor((tint and 0x00FFFFFF) or 0x1A000000)
+                        }
+                        background = fill
+                        setPadding(10.dp, 6.dp, 10.dp, 6.dp)
+                        attachSpringTouch(this, 0.94f) { onClick() }
                     }
                 }
-                val removeBtn = TextView(this).apply {
-                    text = "移除"
-                    textSize = 12.5f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(0xFFFF453A.toInt())
-                    setPadding(12.dp, 8.dp, 4.dp, 4.dp)
-                    setOnClickListener {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("移除成员")
-                            .setMessage("确定要移除「${acc.name}」的登录凭证与课程设置吗？")
-                            .setPositiveButton("移除") { _, _ ->
-                                accounts.removeAt(index)
-                                store.saveAccounts(accounts)
-                                metaStore.removeStudentMeta(acc.name)
-                                renderAccountList()
-                            }
-                            .setNegativeButton("取消", null)
-                            .show()
+
+                val singleRetryBtn = makeActionMiniPill("⚡ 单独补签", 0xFFFF9F0A.toInt()) {
+                    val singleCopy = acc.copy(enabled = true)
+                    executeNumericCheckIn("AUTO", listOf(singleCopy))
+                }
+                val refreshCredBtn = makeActionMiniPill("更新凭证", 0xFF0A84FF.toInt()) {
+                    launchSmoothActivity(Intent(this@MainActivity, WebLoginActivity::class.java).apply {
+                        putExtra("preset_name", acc.name)
+                    })
+                }
+                val removeBtn = makeActionMiniPill("移除", 0xFFFF453A.toInt()) {
+                    showConfirmSheet(
+                        title = "移除成员「${acc.name}」",
+                        message = "移除后将删除该同学的本地登录凭证及勾选的课程设置。",
+                        confirmText = "确认移除",
+                        danger = true
+                    ) {
+                        accounts.removeAt(index)
+                        store.saveAccounts(accounts)
+                        metaStore.removeStudentMeta(acc.name)
+                        renderAccountList(animateEntrance = false)
                     }
                 }
-                footerActions.addView(refreshCredBtn)
+                footerActions.addView(singleRetryBtn, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 8.dp })
+                footerActions.addView(refreshCredBtn, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = 8.dp })
                 footerActions.addView(removeBtn)
                 card.addView(footerActions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 6.dp })
+            }
+
+            if (animateEntrance) {
+                card.alpha = 0f
+                card.translationY = 24f.dpF
+                card.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setStartDelay((index * 45L).coerceAtMost(280L))
+                    .setDuration(300L)
+                    .setInterpolator(DecelerateInterpolator())
+                    .start()
             }
 
             listContainer.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10.dp })
@@ -889,10 +1792,10 @@ class MainActivity : AppCompatActivity() {
     private fun syncAllAccountsCourses() {
         val accounts = store.getAccounts()
         if (accounts.isEmpty()) {
-            Toast.makeText(this, "请先添加同学账号", Toast.LENGTH_SHORT).show()
+            GlassIslandBanner.show(this, "请先添加同学账号", GlassIslandBanner.Tone.WARN, isLight)
             return
         }
-        Toast.makeText(this, "正在同步全员本学期课表...", Toast.LENGTH_SHORT).show()
+        GlassIslandBanner.show(this, "正在同步全员本学期课表...", GlassIslandBanner.Tone.INFO, isLight, 1600L)
         lifecycleScope.launch {
             var totalSynced = 0
             accounts.forEach { acc ->
@@ -910,219 +1813,37 @@ class MainActivity : AppCompatActivity() {
                     totalSynced += courses.size
                 }
             }
-            renderAccountList()
-            Toast.makeText(this@MainActivity, "同步完成，共更新 $totalSynced 门课程", Toast.LENGTH_SHORT).show()
+            renderAccountList(animateEntrance = false)
+            GlassIslandBanner.show(this@MainActivity, "同步完成，共更新 $totalSynced 门课程", GlassIslandBanner.Tone.SUCCESS, isLight)
         }
-    }
-
-    private fun promptPasteLinkDialog() {
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clipText = cm.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
-        val box = FrameLayout(this).apply { setPadding(22.dp, 12.dp, 22.dp, 4.dp) }
-        val input = EditText(this).apply {
-            hint = "粘贴课堂派签到链接（https://...）"
-            setText(if (clipText.contains("http")) clipText else "")
-        }
-        box.addView(input)
-
-        AlertDialog.Builder(this)
-            .setTitle("粘贴链接全员代签")
-            .setView(box)
-            .setPositiveButton("立即全员提交") { _, _ ->
-                val url = input.text.toString().trim()
-                if (url.isNotEmpty()) {
-                    executeUrlCheckIn(url, "手动粘贴链接")
-                }
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun executeUrlCheckIn(rawUrl: String, modeLabel: String, overrideAccounts: List<Account>? = null) {
-        if (overrideAccounts == null && !CheckInCooldownGuard.tryAcquire("url_$rawUrl")) {
-            Toast.makeText(this, "请求已提交，请勿在 3 秒内重复连点", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val baseAccounts = overrideAccounts ?: store.getAccounts()
-        val (targetAccounts, skippedList) = KtpCourseSyncer.filterAccountsByCourse(this, baseAccounts, rawUrl)
-        if (targetAccounts.isEmpty()) {
-            Toast.makeText(this, "当前没有符合该课程勾选条件的启用账号", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        Toast.makeText(this, "正在为 ${targetAccounts.size} 位同学并发提交...", Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
-            val startMs = System.currentTimeMillis()
-            val (okCount, failed) = KtpQrBatchEngine.batchQrCheckIn(
-                context = this@MainActivity,
-                accounts = targetAccounts,
-                qrRawUrl = rawUrl
-            ) { _, _ -> }
-            val cost = System.currentTimeMillis() - startMs
-            val summary = "成功 $okCount 人 · 耗时 ${cost}ms"
-            val detailParts = mutableListOf<String>()
-            if (failed.isNotEmpty()) detailParts.add("失败: ${failed.joinToString(separator = ", ")}")
-            if (skippedList.isNotEmpty()) detailParts.add("跳过: ${skippedList.joinToString(separator = ", ")}")
-            val detail = if (detailParts.isEmpty()) "参与全员均已成功签收" else detailParts.joinToString(separator = " | ")
-
-            metaStore.addRecord(modeLabel, summary, detail)
-
-            val failedAccounts = targetAccounts.filter { acc ->
-                failed.any { msg -> msg.startsWith(acc.name) }
-            }
-
-            val builder = AlertDialog.Builder(this@MainActivity)
-                .setTitle("考勤战报（$modeLabel）")
-                .setMessage("$summary\n$detail")
-                .setPositiveButton("确定", null)
-
-            if (failedAccounts.isNotEmpty()) {
-                builder.setNeutralButton("🔄 仅对失败的 ${failedAccounts.size} 人补签") { _, _ ->
-                    executeUrlCheckIn(rawUrl, "$modeLabel·补签", failedAccounts)
-                }
-            }
-            builder.show()
-        }
-    }
-
-    private fun showCheckInRecordsDialog() {
-        val records = metaStore.getRecords()
-        if (records.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("本机签到战报")
-                .setMessage("本机还没有签到记录，扫码、输入口令或粘贴链接代签后将自动生成战报。")
-                .setPositiveButton("确定", null)
-                .show()
-            return
-        }
-        val text = records.joinToString(separator = "\n\n") { r ->
-            "【${r.time}】${r.mode}\n${r.summary}\n${r.detail}"
-        }
-        AlertDialog.Builder(this)
-            .setTitle("最近考勤战报（近 ${records.size} 次）")
-            .setMessage(text)
-            .setPositiveButton("关闭", null)
-            .setNeutralButton("清空记录") { _, _ ->
-                metaStore.clearRecords()
-                Toast.makeText(this, "已清空本地战报", Toast.LENGTH_SHORT).show()
-            }
-            .show()
     }
 
     private fun verifyAllTokens() {
-        Toast.makeText(this, "正在检测全员登录状态...", Toast.LENGTH_SHORT).show()
+        val accounts = store.getAccounts()
+        if (accounts.isEmpty()) {
+            GlassIslandBanner.show(this, "请先添加同学账号", GlassIslandBanner.Tone.WARN, isLight)
+            return
+        }
+        GlassIslandBanner.show(this, "正在并发检测全员凭证存活状态...", GlassIslandBanner.Tone.INFO, isLight, 1600L)
         lifecycleScope.launch {
-            val accounts = store.getAccounts()
             accounts.forEach { acc ->
                 acc.isValid = KtpQrBatchEngine.checkTokenValid(acc.token)
             }
             store.saveAccounts(accounts)
-            renderAccountList()
+            renderAccountList(animateEntrance = false)
             val expired = accounts.filter { !it.isValid }.map { acc -> acc.name }
-            val msg = if (expired.isEmpty()) "全员 Token 均正常有效！" else "以下同学凭证已过期，请展开卡片点「更新凭证」：${expired.joinToString(separator = ", ")}"
-            AlertDialog.Builder(this@MainActivity).setTitle("状态体检结果").setMessage(msg).setPositiveButton("确定", null).show()
-        }
-    }
-
-    private fun showToolsDialog() {
-        val currentGps = metaStore.getGpsPreset()
-        val gpsLabel = if (currentGps != null) "GPS 坐标预设（当前：${currentGps.label}）" else "设置常用教学楼 GPS 坐标"
-        AlertDialog.Builder(this)
-            .setTitle("地点预设与配置流转")
-            .setItems(arrayOf(gpsLabel, "复制全组配置到剪贴板（发给室友接管）", "从剪贴板导入配置", "一键清空所有本地凭证")) { _, which ->
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                when (which) {
-                    0 -> promptGpsPresetDialog()
-                    1 -> {
-                        cm.setPrimaryClip(ClipData.newPlainText("ktp_config", store.exportJson()))
-                        Toast.makeText(this, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                    }
-                    2 -> {
-                        val text = cm.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
-                        if (store.importJson(text)) {
-                            renderAccountList()
-                            Toast.makeText(this, "导入成功", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(this, "剪贴板内容格式无效", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    3 -> {
-                        store.clearAll()
-                        renderAccountList()
-                        Toast.makeText(this, "已彻底清除所有本地数据", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            val msg = if (expired.isEmpty()) {
+                "全员共 ${accounts.size} 位同学凭证均正常有效，可随时发起并发抢签。"
+            } else {
+                "以下同学凭证已过期，请展开对应卡片点击「更新凭证」重新登录：\n${expired.joinToString(separator = "、")}"
             }
-            .show()
-    }
-
-    private fun promptGpsPresetDialog() {
-        val old = metaStore.getGpsPreset()
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(22.dp, 12.dp, 22.dp, 4.dp)
+            showResultReportSheet(
+                title = "全员凭证体检报告",
+                summary = if (expired.isEmpty()) "全部有效 (${accounts.size}/${accounts.size})" else "发现 ${expired.size} 人凭证过期",
+                detail = msg,
+                failedAccounts = emptyList()
+            ) {}
         }
-        val nameInput = EditText(this).apply {
-            hint = "地点备注（如：教学楼A栋）"
-            setText(old?.label ?: "")
-        }
-        val latInput = EditText(this).apply {
-            hint = "纬度 Latitude（如：26.058321）"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(old?.lat?.toString() ?: "")
-        }
-        val lngInput = EditText(this).apply {
-            hint = "经度 Longitude（如：119.197452）"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(old?.lng?.toString() ?: "")
-        }
-        layout.addView(nameInput)
-        layout.addView(latInput)
-        layout.addView(lngInput)
-
-        AlertDialog.Builder(this)
-            .setTitle("常用教学楼 GPS 坐标预设")
-            .setMessage("位置与口令签到时将自动叠加 ±8m 随机偏移防雷同：")
-            .setView(layout)
-            .setPositiveButton("保存预设") { _, _ ->
-                val label = nameInput.text.toString().trim().ifEmpty { "常用教室" }
-                val lat = latInput.text.toString().trim().toDoubleOrNull()
-                val lng = lngInput.text.toString().trim().toDoubleOrNull()
-                if (lat != null && lng != null) {
-                    metaStore.saveGpsPreset(label, lat, lng)
-                    Toast.makeText(this, "已保存地点：$label", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "请输入有效的经纬度数字", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun makeBackdropDrawable(): Drawable = object : Drawable() {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        override fun draw(canvas: Canvas) {
-            val w = bounds.width().toFloat()
-            val h = bounds.height().toFloat()
-            if (w <= 0f || h <= 0f) return
-
-            val c1 = if (isLight) intArrayOf(0x4438BDF8, 0x1238BDF8, Color.TRANSPARENT) else intArrayOf(0x660A84FF, 0x1A0A84FF, Color.TRANSPARENT)
-            paint.shader = RadialGradient(w * 0.85f, h * 0.14f, w * 0.72f, c1, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-            canvas.drawCircle(w * 0.85f, h * 0.14f, w * 0.72f, paint)
-
-            val c2 = if (isLight) intArrayOf(0x38818CF8, 0x10818CF8, Color.TRANSPARENT) else intArrayOf(0x555E5CE6, 0x155E5CE6, Color.TRANSPARENT)
-            paint.shader = RadialGradient(w * 0.12f, h * 0.38f, w * 0.65f, c2, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-            canvas.drawCircle(w * 0.12f, h * 0.38f, w * 0.65f, paint)
-
-            val c3 = if (isLight) intArrayOf(0x382DD4BF, 0x0E2DD4BF, Color.TRANSPARENT) else intArrayOf(0x4000C7BE, 0x1000C7BE, Color.TRANSPARENT)
-            paint.shader = RadialGradient(w * 0.78f, h * 0.76f, w * 0.68f, c3, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-            canvas.drawCircle(w * 0.78f, h * 0.76f, w * 0.68f, paint)
-        }
-        override fun setAlpha(alpha: Int) {}
-        override fun setColorFilter(colorFilter: ColorFilter?) {}
-        @Deprecated("Deprecated in Java")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private fun makeThemeToggleDrawable(tint: Int): Drawable = object : Drawable() {
@@ -1269,6 +1990,7 @@ class IosToggleSwitch(
         }
 
         setOnClickListener {
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             checked = !checked
             ValueAnimator.ofFloat(progress, if (checked) 1f else 0f).apply {
                 duration = 180

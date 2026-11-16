@@ -1,17 +1,12 @@
 package com.ktp.helper
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.ColorFilter
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.PixelFormat
-import android.graphics.Typeface
+import android.graphics.*
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
@@ -21,9 +16,12 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +51,7 @@ class ScanActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
     private lateinit var focusRingView: View
+    private lateinit var torchBtn: TextView
     private var camera: androidx.camera.core.Camera? = null
     private var torchOn = false
     private var isProcessing = false
@@ -61,9 +60,14 @@ class ScanActivity : AppCompatActivity() {
     private var lastScannedQr: String = ""
     private var autoRescanCount = 0
     private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private var laserAnimator: ValueAnimator? = null
+    private val zoomButtons = mutableListOf<Pair<Float, TextView>>()
 
     private val Int.dp: Int
         get() = (this * resources.displayMetrics.density).toInt()
+
+    private val Float.dpF: Float
+        get() = this * resources.displayMetrics.density
 
     private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera() else finish()
@@ -79,11 +83,31 @@ class ScanActivity : AppCompatActivity() {
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.BLACK
+        @Suppress("DEPRECATION")
+        window.apply {
+            clearFlags(android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS)
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+            decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            statusBarColor = Color.TRANSPARENT
+            navigationBarColor = Color.BLACK
+        }
 
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         previewView = PreviewView(this)
-        val reticleOverlay = View(this).apply { background = makeReticleDrawable() }
+
+        var laserProgress = 0f
+        val reticleOverlay = ReticleLaserOverlayView(this) { laserProgress }
+        laserAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 2100L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener { anim ->
+                laserProgress = anim.animatedValue as Float
+                reticleOverlay.invalidate()
+            }
+            start()
+        }
 
         focusRingView = View(this).apply {
             visibility = View.GONE
@@ -101,15 +125,12 @@ class ScanActivity : AppCompatActivity() {
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                currentZoom = when {
+                val nextZoom = when {
                     currentZoom < 2.0f -> 2.5f
                     currentZoom < 3.5f -> 4.0f
                     else -> 1.0f
                 }
-                camera?.cameraControl?.setZoomRatio(currentZoom)
-                if (!isProcessing) {
-                    statusText.text = "变焦倍率：${currentZoom}x · 单击对焦 / 双击切换"
-                }
+                applyZoom(nextZoom)
                 return true
             }
         })
@@ -121,13 +142,11 @@ class ScanActivity : AppCompatActivity() {
 
         val closeBtn = TextView(this).apply {
             text = "✕"
-            textSize = 16f
+            textSize = 15f
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            val fill = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x660F172A) }
-            val rim = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x55FFFFFF) }
-            background = LayerDrawable(arrayOf<Drawable>(fill, rim))
+            background = makeRoundGlass(0x770F172A, 0x55FFFFFF)
             setOnClickListener { finish() }
         }
 
@@ -137,37 +156,70 @@ class ScanActivity : AppCompatActivity() {
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            val r = 20f * resources.displayMetrics.density
-            val fill = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(0x770A84FF) }
+            val r = 20f.dpF
+            val fill = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(0x880A84FF.toInt()) }
             val rim = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x77FFFFFF) }
             background = LayerDrawable(arrayOf<Drawable>(fill, rim))
             setPadding(16.dp, 8.dp, 16.dp, 8.dp)
             setOnClickListener { pickGalleryLauncher.launch("image/*") }
         }
 
-        val torchBtn = TextView(this).apply {
+        torchBtn = TextView(this).apply {
             text = "🔦"
-            textSize = 16f
+            textSize = 15f
             gravity = Gravity.CENTER
-            val fill = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x660F172A) }
-            val rim = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x55FFFFFF) }
-            background = LayerDrawable(arrayOf<Drawable>(fill, rim))
+            background = makeRoundGlass(0x770F172A, 0x55FFFFFF)
             setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 torchOn = !torchOn
                 camera?.cameraControl?.enableTorch(torchOn)
+                background = if (torchOn) makeRoundGlass(0xCCFF9F0A.toInt(), 0xFFFFFFFF.toInt())
+                else makeRoundGlass(0x770F172A, 0x55FFFFFF)
             }
         }
 
+        // 底部变焦分段胶囊 (1.0x · 2.5x · 4.0x)
+        val zoomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val r = 20f.dpF
+            val fill = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(0x880F172A.toInt()) }
+            val rim = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(1.dp, 0x45FFFFFF) }
+            background = LayerDrawable(arrayOf<Drawable>(fill, rim))
+            setPadding(5.dp, 4.dp, 5.dp, 4.dp)
+        }
+        val zoomLevels = listOf(1.0f to "1.0x", 2.5f to "2.5x", 4.0f to "4.0x")
+        zoomLevels.forEachIndexed { idx, (ratio, label) ->
+            val pill = TextView(this).apply {
+                text = label
+                textSize = 12f
+                fontFeatureSettings = "tnum"
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setPadding(14.dp, 6.dp, 14.dp, 6.dp)
+                setOnClickListener {
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    applyZoom(ratio)
+                }
+            }
+            zoomButtons.add(ratio to pill)
+            zoomBar.addView(pill, LinearLayout.LayoutParams(-2, -2).apply {
+                if (idx < zoomLevels.lastIndex) rightMargin = 4.dp
+            })
+        }
+        updateZoomPillsUI(1.0f)
+
         statusText = TextView(this).apply {
-            text = "对准投影仪二维码 · 单击对焦 · 双击变焦"
+            text = "对准投影仪二维码 · 单击测光对焦"
             setTextColor(Color.WHITE)
             textSize = 13f
             setTypeface(null, Typeface.BOLD)
-            val r = 24f * resources.displayMetrics.density
+            val r = 24f.dpF
             val fill = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = r
-                setColor(0x880F172A.toInt())
+                setColor(0x990F172A.toInt())
             }
             val rim = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -176,26 +228,33 @@ class ScanActivity : AppCompatActivity() {
                 setStroke(1.dp, 0x55FFFFFF)
             }
             background = LayerDrawable(arrayOf<Drawable>(fill, rim))
-            setPadding(22.dp, 12.dp, 22.dp, 12.dp)
+            setPadding(22.dp, 11.dp, 22.dp, 11.dp)
             gravity = Gravity.CENTER
         }
+
+        val bottomHud = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        bottomHud.addView(zoomBar, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = 12.dp })
+        bottomHud.addView(statusText, LinearLayout.LayoutParams(-2, -2))
 
         root.addView(previewView, FrameLayout.LayoutParams(-1, -1))
         root.addView(reticleOverlay, FrameLayout.LayoutParams(-1, -1))
         root.addView(focusRingView, FrameLayout.LayoutParams(64.dp, 64.dp))
         root.addView(closeBtn, FrameLayout.LayoutParams(40.dp, 40.dp, Gravity.TOP or Gravity.START).apply {
             leftMargin = 20.dp
-            topMargin = 36.dp
+            topMargin = 42.dp
         })
         root.addView(galleryBtn, FrameLayout.LayoutParams(-2, 40.dp, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = 36.dp
+            topMargin = 42.dp
         })
         root.addView(torchBtn, FrameLayout.LayoutParams(40.dp, 40.dp, Gravity.TOP or Gravity.END).apply {
             rightMargin = 20.dp
-            topMargin = 36.dp
+            topMargin = 42.dp
         })
-        root.addView(statusText, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-            bottomMargin = 52.dp
+        root.addView(bottomHud, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = 46.dp
         })
         setContentView(root)
 
@@ -213,6 +272,43 @@ class ScanActivity : AppCompatActivity() {
             startCamera()
         } else {
             requestPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun makeRoundGlass(fillCol: Int, strokeCol: Int): LayerDrawable {
+        val fill = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(fillCol) }
+        val rim = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.TRANSPARENT); setStroke(1.dp, strokeCol) }
+        return LayerDrawable(arrayOf<Drawable>(fill, rim))
+    }
+
+    private fun applyZoom(ratio: Float) {
+        currentZoom = ratio
+        camera?.cameraControl?.setZoomRatio(ratio)
+        updateZoomPillsUI(ratio)
+    }
+
+    private fun updateZoomPillsUI(activeRatio: Float) {
+        var nearestRatio = 1.0f
+        var minDiff = Float.MAX_VALUE
+        for ((r, _) in zoomButtons) {
+            val diff = kotlin.math.abs(r - activeRatio)
+            if (diff < minDiff) {
+                minDiff = diff
+                nearestRatio = r
+            }
+        }
+        for ((r, pill) in zoomButtons) {
+            if (r == nearestRatio) {
+                pill.background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 15f.dpF
+                    setColor(0xFF0A84FF.toInt())
+                }
+                pill.setTextColor(Color.WHITE)
+            } else {
+                pill.background = null
+                pill.setTextColor(0xB3FFFFFF.toInt())
+            }
         }
     }
 
@@ -243,38 +339,6 @@ class ScanActivity : AppCompatActivity() {
             lower.contains("courseid")
     }
 
-    private fun makeReticleDrawable(): Drawable = object : Drawable() {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xCCFFFFFF.toInt()
-            style = Paint.Style.STROKE
-            strokeWidth = 3.5f * resources.displayMetrics.density
-            strokeCap = Paint.Cap.ROUND
-        }
-        override fun draw(canvas: Canvas) {
-            val w = bounds.width().toFloat()
-            val h = bounds.height().toFloat()
-            if (w <= 0f || h <= 0f) return
-            val size = w * 0.62f
-            val left = (w - size) / 2f
-            val top = (h - size) / 2f - h * 0.04f
-            val right = left + size
-            val bottom = top + size
-            val arm = size * 0.14f
-
-            val path = Path().apply {
-                moveTo(left, top + arm); lineTo(left, top); lineTo(left + arm, top)
-                moveTo(right - arm, top); lineTo(right, top); lineTo(right, top + arm)
-                moveTo(left, bottom - arm); lineTo(left, bottom); lineTo(left + arm, bottom)
-                moveTo(right - arm, bottom); lineTo(right, bottom); lineTo(right, bottom - arm)
-            }
-            canvas.drawPath(path, paint)
-        }
-        override fun setAlpha(alpha: Int) {}
-        override fun setColorFilter(colorFilter: ColorFilter?) {}
-        @Deprecated("Deprecated in Java")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
-    }
-
     private fun buildScanner() = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
@@ -282,6 +346,7 @@ class ScanActivity : AppCompatActivity() {
                 ZoomSuggestionOptions.Builder { zoomRatio ->
                     currentZoom = zoomRatio
                     camera?.cameraControl?.setZoomRatio(zoomRatio)
+                    runOnUiThread { updateZoomPillsUI(zoomRatio) }
                     true
                 }.setMaxSupportedZoomRatio(5.0f).build()
             )
@@ -300,12 +365,12 @@ class ScanActivity : AppCompatActivity() {
                     } else {
                         isProcessing = false
                         statusText.text = "未在图片中识别到课堂派考勤二维码"
-                        Toast.makeText(this, "未识别到课堂派考勤二维码", Toast.LENGTH_SHORT).show()
+                        GlassIslandBanner.show(this, "未识别到课堂派考勤二维码", GlassIslandBanner.Tone.WARN, false)
                     }
                 }
                 .addOnFailureListener {
                     isProcessing = false
-                    Toast.makeText(this, "图片解析失败", Toast.LENGTH_SHORT).show()
+                    GlassIslandBanner.show(this, "图片解析失败", GlassIslandBanner.Tone.ERROR, false)
                 }
         } catch (_: Exception) {
             isProcessing = false
@@ -435,8 +500,73 @@ class ScanActivity : AppCompatActivity() {
         v.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 70, 80, 70), -1))
     }
 
+    @Suppress("DEPRECATION")
+    override fun finish() {
+        super.finish()
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+    }
+
     override fun onDestroy() {
+        laserAnimator?.cancel()
         cameraExecutor.shutdown()
         super.onDestroy()
+    }
+}
+
+class ReticleLaserOverlayView(
+    context: Context,
+    private val progressProvider: () -> Float
+) : View(context) {
+    private val dimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x7A040711 }
+    private val clearPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+    private val cornerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF64D2FF.toInt()
+        style = Paint.Style.STROKE
+        strokeWidth = 3.8f * resources.displayMetrics.density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val laserPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    init {
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+
+        val size = w * 0.64f
+        val left = (w - size) / 2f
+        val top = (h - size) / 2f - h * 0.05f
+        val right = left + size
+        val bottom = top + size
+        val cutRadius = 22f * resources.displayMetrics.density
+
+        // 外部半透明暗化遮罩 + 中央圆角透明镂空
+        canvas.drawRect(0f, 0f, w, h, dimPaint)
+        canvas.drawRoundRect(RectF(left, top, right, bottom), cutRadius, cutRadius, clearPaint)
+
+        // 科技青蓝圆角取景框四角
+        val arm = size * 0.14f
+        val path = Path().apply {
+            moveTo(left, top + arm); lineTo(left, top); lineTo(left + arm, top)
+            moveTo(right - arm, top); lineTo(right, top); lineTo(right, top + arm)
+            moveTo(left, bottom - arm); lineTo(left, bottom); lineTo(left + arm, bottom)
+            moveTo(right - arm, bottom); lineTo(right, bottom); lineTo(right, bottom - arm)
+        }
+        canvas.drawPath(path, cornerPaint)
+
+        // 上下往复扫动的激光光束
+        val pad = 16f * resources.displayMetrics.density
+        val y = top + pad + (size - pad * 2f) * progressProvider()
+        laserPaint.shader = LinearGradient(
+            left + pad, y, right - pad, y,
+            intArrayOf(Color.TRANSPARENT, 0xCC30D158.toInt(), 0xFF64D2FF.toInt(), 0xCC30D158.toInt(), Color.TRANSPARENT),
+            floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        laserPaint.strokeWidth = 2.6f * resources.displayMetrics.density
+        canvas.drawLine(left + pad, y, right - pad, y, laserPaint)
     }
 }
