@@ -143,7 +143,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun attachSpringTouch(view: View, scaleDown: Float = 0.965f, onClick: () -> Unit) {
+    private fun attachSpringTouch(view: View, scaleDown: Float = 0.965f, onClick: (View) -> Unit) {
         view.setOnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -153,7 +153,7 @@ class MainActivity : AppCompatActivity() {
                 MotionEvent.ACTION_UP -> {
                     v.animate().scaleX(1f).scaleY(1f).setDuration(165)
                         .setInterpolator(DecelerateInterpolator()).start()
-                    onClick()
+                    onClick(v)
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     v.animate().scaleX(1f).scaleY(1f).setDuration(165).start()

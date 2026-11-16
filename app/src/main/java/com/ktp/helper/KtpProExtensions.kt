@@ -188,6 +188,10 @@ class ProMetaStore(context: Context) {
             .apply()
     }
 
+    fun clearGpsPreset() {
+        prefs.edit().remove("gps_label").remove("gps_lat").remove("gps_lng").apply()
+    }
+
     fun getRecords(): List<CheckInRecord> {
         val raw = prefs.getString("checkin_records", "[]") ?: "[]"
         return try {
