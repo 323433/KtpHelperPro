@@ -91,8 +91,8 @@ class WebLoginActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         val tokenPill = TextView(this).apply {
-            text = "🔑 粘贴Token"
-            textSize = 11f
+            text = "粘贴Token"
+            textSize = 11.5f
             setTypeface(null, Typeface.BOLD)
             setTextColor(0xFF30D158.toInt())
             background = GradientDrawable().apply {
@@ -100,7 +100,7 @@ class WebLoginActivity : AppCompatActivity() {
                 cornerRadius = 12f.dpF
                 setColor(0x2230D158)
             }
-            setPadding(8.dp, 5.dp, 8.dp, 5.dp)
+            setPadding(10.dp, 5.dp, 10.dp, 5.dp)
             setOnClickListener { promptDirectTokenSheet() }
         }
         topBar.addView(backBtn)
@@ -188,8 +188,7 @@ class WebLoginActivity : AppCompatActivity() {
             isLight = false,
             title = "粘贴 Token 直录成员",
             subtitle = "适合从微信/QQ直接粘贴室友发来的登录凭证",
-            badgeColor = 0xFF0A84FF.toInt(),
-            glyphType = SheetGlyphType.KEYPAD
+            badgeColor = 0xFF0A84FF.toInt()
         )
         val body = sheet.getBody()
         val nameInput = EditText(this).apply {
@@ -257,8 +256,7 @@ class WebLoginActivity : AppCompatActivity() {
             isLight = false,
             title = "登录凭证提取成功",
             subtitle = "保存后将自动拉取该同学本学期全部课程",
-            badgeColor = 0xFF30D158.toInt(),
-            glyphType = SheetGlyphType.CHECK
+            badgeColor = 0xFF30D158.toInt()
         )
         val body = sheet.getBody()
         val input = EditText(this).apply {

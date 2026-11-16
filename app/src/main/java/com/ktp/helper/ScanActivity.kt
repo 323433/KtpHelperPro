@@ -54,6 +54,8 @@ class ScanActivity : AppCompatActivity() {
     private lateinit var torchBtn: FrameLayout
     private var camera: androidx.camera.core.Camera? = null
     private var torchOn = false
+    private var lowLightHinted = false
+    private var frameCounter = 0
     private var isProcessing = false
     private var currentZoom = 1.0f
     private var pendingRetryAccounts: List<Account>? = null
@@ -524,6 +526,33 @@ class ScanActivity : AppCompatActivity() {
             analysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 val mediaImage = imageProxy.image
                 if (mediaImage != null && !isProcessing) {
+                    // 每 24 帧无侵入式采样环境亮度，过暗时高亮闪光灯按钮
+                    frameCounter++
+                    if (!torchOn && !lowLightHinted && frameCounter % 24 == 0) {
+                        try {
+                            val dup = mediaImage.planes[0].buffer.duplicate()
+                            dup.rewind()
+                            val lim = dup.limit()
+                            if (lim > 64) {
+                                var sum = 0L
+                                var cnt = 0
+                                var idx = 0
+                                while (idx < lim) {
+                                    sum += (dup.get(idx).toInt() and 0xFF)
+                                    cnt++
+                                    idx += 64
+                                }
+                                if (cnt > 0 && (sum / cnt) < 42L) {
+                                    lowLightHinted = true
+                                    runOnUiThread {
+                                        torchBtn.background = makeRoundGlass(0x770F172A, 0xFFFF9F0A.toInt())
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {
+                        }
+                    }
+
                     val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
                     scanner.process(image)
                         .addOnSuccessListener { barcodes ->

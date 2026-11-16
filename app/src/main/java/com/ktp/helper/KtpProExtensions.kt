@@ -739,7 +739,8 @@ object KtpQrBatchEngine {
             if (code == 10000 || status == 1 || msg.contains("成功") || msg.contains("已签到") || msg.contains("重复")) {
                 QrSingleResult.Success
             } else {
-                QrSingleResult.Failed("${acc.name}(${msg.ifEmpty { "二维码已过期或签到失败" }})")
+                val rawReason = msg.ifEmpty { "二维码已过期或签到失败" }
+                QrSingleResult.Failed("${acc.name}([$code] $rawReason)")
             }
         } catch (_: Exception) {
             QrSingleResult.Failed("${acc.name}(请求异常)")
@@ -845,7 +846,7 @@ object KtpNumericCheckInEngine {
                 SingleOutcome.Success
             } else {
                 val reason = msg.ifEmpty { "口令错误或已结束" }
-                SingleOutcome.Failed("${acc.name}($reason)")
+                SingleOutcome.Failed("${acc.name}([$statusCode] $reason)")
             }
         } catch (_: Exception) {
             SingleOutcome.Failed("${acc.name}(响应异常)")
